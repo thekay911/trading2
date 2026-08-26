@@ -5,6 +5,9 @@
   python -m crowcode rules    --preset scalp
   python -m crowcode split    --capital 5000
   python -m crowcode demo
+  python -m crowcode live     --symbol XAUUSD --preset scalp            # 드라이런
+  python -m crowcode live     --symbol XAUUSD --preset scalp --live     # 실주문
+  python -m crowcode live     --paper --bars 25000                      # 단말 없이 시뮬레이션
 """
 
 from __future__ import annotations
@@ -79,6 +82,45 @@ _DEMO_DATA = {
 }
 
 
+def cmd_live(args) -> int:
+    from crowcode.mt5 import Journal, LiveConfig, LiveRunner, PaperBroker
+
+    cfg = preset(args.preset)
+    live = LiveConfig(
+        symbol=args.symbol, preset_name=args.preset, base_timeframe=args.timeframe,
+        bars=args.bars, magic=args.magic, deviation=args.deviation,
+        dry_run=not args.live, state_path=args.state, poll_seconds=args.poll,
+        max_spread_points=args.max_spread,
+    )
+    journal = Journal(args.journal, echo=True)
+
+    if args.paper:
+        broker = PaperBroker(_series(args), balance=args.balance, start_index=args.warmup)
+        runner = LiveRunner(broker, live, cfg, journal)
+        n = 0
+        while broker.advance():
+            if runner.step():
+                n += 1
+        print(f"\n페이퍼 실행 완료 — 시그널 {n}건, 최종 잔고 {broker.account().balance:,.2f}")
+        return 0
+
+    from crowcode.mt5.terminal import Mt5Broker
+
+    if args.live:
+        print("!! 실주문 모드입니다. 계좌에 실제 주문이 나갑니다. !!\n"
+              f"   심볼={args.symbol} 프리셋={args.preset} 매직={args.magic} "
+              f"리스크={cfg.risk_pct}%/거래", flush=True)
+    broker = Mt5Broker(login=args.login, password=args.password, server=args.server,
+                       terminal_path=args.terminal_path,
+                       server_utc_offset=args.server_offset)
+    try:
+        runner = LiveRunner(broker, live, cfg, journal)
+        runner.run(max_iterations=1 if args.once else None)
+    finally:
+        broker.shutdown()
+    return 0
+
+
 def cmd_demo(args) -> int:
     for name in PRESETS:
         d = _DEMO_DATA[name]
@@ -127,6 +169,27 @@ def main(argv=None) -> int:
 
     s5 = sub.add_parser("demo", help="합성 데이터로 전 프리셋 실행", parents=[common])
     s5.set_defaults(func=cmd_demo)
+
+    s6 = sub.add_parser("live", help="MT5 단말에 붙어 실행 (기본은 드라이런)", parents=[common])
+    s6.add_argument("--live", action="store_true",
+                    help="실제 주문 전송 (기본은 드라이런: 주문을 만들되 보내지 않음)")
+    s6.add_argument("--paper", action="store_true", help="단말 없이 시뮬레이션 브로커로 실행")
+    s6.add_argument("--magic", type=int, default=700911, help="이 봇의 주문 식별 번호")
+    s6.add_argument("--deviation", type=int, default=20, help="시장가 슬리피지 허용(포인트)")
+    s6.add_argument("--max-spread", type=int, default=60, dest="max_spread",
+                    help="이보다 스프레드가 넓으면 진입 안 함(포인트)")
+    s6.add_argument("--poll", type=int, default=5, help="폴링 간격(초)")
+    s6.add_argument("--once", action="store_true", help="1회만 평가하고 종료")
+    s6.add_argument("--journal", default="state/journal.jsonl")
+    s6.add_argument("--state", default="state/crowcode_state.json")
+    s6.add_argument("--warmup", type=int, default=800, help="--paper 시작 인덱스")
+    s6.add_argument("--login", type=int)
+    s6.add_argument("--password")
+    s6.add_argument("--server")
+    s6.add_argument("--terminal-path", dest="terminal_path")
+    s6.add_argument("--server-offset", type=float, dest="server_offset",
+                    help="서버시간 - UTC (시간). 생략하면 자동 추정")
+    s6.set_defaults(func=cmd_live)
 
     args = p.parse_args(argv)
     return args.func(args)

@@ -7,6 +7,7 @@ Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0
 탑다운 파이프라인 하나로 묶고 파라미터화했다.
 
 - 규칙 원문 ↔ 코드 대응표: **[docs/RULEBOOK.md](docs/RULEBOOK.md)**
+- MT5 에 붙이는 방법: **[docs/MT5_SETUP.md](docs/MT5_SETUP.md)**
 - 외부 의존성 없음 (Python 3.10+ 표준 라이브러리만)
 
 ---
@@ -39,7 +40,7 @@ Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0
 
 ```bash
 git clone <repo> && cd trading2
-python3 -m unittest discover -s tests -t .     # 89개 테스트
+python3 -m unittest discover -s tests -t .     # 126개 테스트
 python3 examples/quickstart.py                 # 데이터 없이 바로 실행되는 예제
 ```
 
@@ -94,6 +95,48 @@ python3 -m crowcode demo        # 세 프리셋 전부 합성 데이터로 실�
 
 ---
 
+## MT5 에서 실제로 돌리기
+
+같은 규칙을 두 가지 방식으로 실행할 수 있다. 자세한 절차는
+[docs/MT5_SETUP.md](docs/MT5_SETUP.md).
+
+### A. MQL5 EA — Python 없이 차트에 부착
+
+`mql5/Experts/CrowConcept.mq5` 를 데이터 폴더의 `MQL5/Experts/` 에 넣고
+MetaEditor 에서 F7 로 컴파일한 뒤 차트에 드래그한다.
+`InpDryRun=true` 로 두면 주문 없이 로그만 남기므로 먼저 이걸로 검증한다.
+
+```
+CrowConcept SIGNAL BUY LIMIT | entry=1948.58 sl=1947.83 tp=1950.81 rr=1:3.0 lots=0.06 zone=fvg
+CrowConcept: 1234567 moved to breakeven at 1950.07
+CrowConcept: 1234567 partial close 0.03 at 3.0R
+```
+
+### B. Python 브릿지 — 기존 엔진을 그대로 사용
+
+```powershell
+pip install MetaTrader5                                    # Windows 단말 필요
+
+python -m crowcode live --symbol XAUUSD --preset scalp      # 드라이런(기본)
+python -m crowcode live --symbol XAUUSD --preset scalp --live   # 실주문
+python -m crowcode live --paper --bars 25000                # 단말 없이 시뮬레이션
+```
+
+러너가 매 스텝 하는 일:
+
+```
+1. 포지션 관리   2R → 본절, 3R → 분할 (신규 진입보다 먼저)
+2. 대기 주문     만료 / 전제 붕괴(종가가 SL 밖) 시 취소
+3. 리스크 게이트 브로커 체결 내역으로 당일 손익·연속 손절 재구성
+4. 신규 평가     새 봉이 마감됐고, 포지션·대기주문이 없을 때만
+5. 주문 전송     최소 이격·랏 단위·스프레드 재검증 후
+```
+
+브로커 상태를 매번 다시 읽으므로 프로세스를 재시작해도 이어서 동작한다.
+`PaperBroker` 덕분에 단말 없는 환경(리눅스/CI)에서도 실행 경로 전체를 테스트한다.
+
+---
+
 ## 파이썬에서 쓰기
 
 ```python
@@ -132,6 +175,12 @@ print(res.report())
 | `risk.py` | 사이징, 레버리지 상한, 본절/분할, 일일 한도, 계좌 3분할 |
 | `strategy.py` | 위 전부를 묶는 탑다운 파이프라인 |
 | `backtest.py` | 이벤트 기반 백테스터 (SL 우선 체결, 스프레드 반영) |
+| `mt5/broker.py` | 브로커 인터페이스 + 심볼 사양(랏 단위, 최소 이격, 틱 가치) |
+| `mt5/paper.py` | 단말 없이 도는 시뮬레이션 브로커 |
+| `mt5/terminal.py` | 실제 MetaTrader5 연결 (서버시간 보정, 체결방식 선택) |
+| `mt5/runner.py` | 실전 루프 — 관리 → 대기주문 → 리스크 → 평가 → 전송 |
+| `mt5/journal.py` | JSONL 기록 (기각 사유 집계 포함) |
+| `mql5/Experts/CrowConcept.mq5` | 같은 규칙의 네이티브 EA |
 
 ---
 
@@ -144,6 +193,11 @@ print(res.report())
 - **기각 사유 보존** — 어떤 필터가 몇 번 걸렀는지 전부 집계된다.
 
 ## 주의
+
+MQL5 EA 는 이 저장소에서 **컴파일·실행 검증을 하지 못했다** (MetaEditor 없는 환경).
+Python 브릿지의 `Mt5Broker` 도 실제 단말 없이 작성됐다 — 러너·전략·리스크 경로는
+`PaperBroker` 로 전부 테스트했지만 MT5 API 호출 자체는 Windows 에서 처음 돌려 봐야 한다.
+반드시 데모 계좌에서 검증한 뒤 실계좌로 옮길 것.
 
 합성 데이터는 무작위 보행이라 우위가 없다. `demo` 의 숫자는 규칙 작동 확인용이지
 성과 근거가 아니다. 채널의 "월 30-50%", "승률 76%" 같은 주장은 검증할 수 없어
