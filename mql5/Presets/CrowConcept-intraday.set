@@ -1,0 +1,39 @@
+; CrowConcept preset: intraday  (generated from crowcode/config.py)
+; H4 > H1 > M15 | risk 1.0% | stop $2.5-$25.0
+; Load in MT5: EA properties -> Load, then set InpDryRun=true for the first weeks.
+
+InpHTF=16388
+InpMTF=16385
+InpLTF=15
+InpSwingLeft=2
+InpSwingRight=2
+InpBreakOnClose=true
+InpRequireSweep=true
+InpRequireChoch=true
+InpSweepLookback=60
+InpUseOrderBlocks=true
+InpUseFVG=true
+InpMarketIfAtZone=true
+InpSlBufferATR=0.3
+InpMaxEntryDistATR=3.0
+InpLimitExpiryBars=32
+InpMinSLPrice=2.5
+InpMaxSLPrice=25.0
+InpMaxSpreadRatio=0.08
+InpRiskPercent=1.0
+InpMinRR=2.0
+InpTargetRR=3.0
+InpBreakevenAtR=2.0
+InpPartialAtR=3.0
+InpPartialFraction=0.5
+InpMaxTradesPerDay=3
+InpMaxConsecLosses=2
+InpMaxDailyLossPct=3.0
+InpSession1Start=7.0
+InpSession1End=12.0
+InpSession2Start=12.0
+InpSession2End=17.0
+InpBlockFridayClose=true
+InpNewsBeforeMin=15
+InpNewsAfterMin=30
+InpDryRun=true

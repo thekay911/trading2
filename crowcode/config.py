@@ -100,53 +100,124 @@ class CrowConfig:
     account_split: tuple[float, float, float] = (0.6, 0.3, 0.1)  # swing / scalp / highrisk
 
     # ------------------------------------------------------------------
-    # 8. 심볼 사양 (사이징용)
+    # 8. 심볼 사양 (사이징용) — 기본값은 XAUUSD
     # ------------------------------------------------------------------
-    contract_size: float = 100.0      # XAUUSD 1랏 = 100 oz
+    contract_size: float = 100.0      # XAUUSD 1랏 = 100 oz → $1 움직임 = $100
     min_lot: float = 0.01
     lot_step: float = 0.01
     max_lot: float = 50.0
+
+    # ------------------------------------------------------------------
+    # 9. 손절 폭 가드 (가격 단위 = 금 달러)
+    #    말도 안 되는 손절을 걸러낸다. 0 이면 제한 없음.
+    # ------------------------------------------------------------------
+    min_sl_price: float = 0.0         # 이보다 좁으면 스프레드·노이즈에 먹힌다
+    max_sl_price: float = 0.0         # 이보다 넓으면 그 프리셋의 성격이 아니다
+    max_spread_ratio: float = 0.0     # 스프레드 / 손절폭 상한
+    #    [출처] "M1 은 SL 이 2~3핍이라 스프레드에 죽는다" — 이 규칙을 수치화한 것
 
     name: str = "swing"
 
     def with_(self, **kw) -> "CrowConfig":
         return replace(self, **kw)
 
+    # ------------------------------------------------------------------
+    def validate(self) -> list[str]:
+        """설정끼리 모순되는 조합을 찾아낸다.
+
+        가장 흔한 사고는 '거래당 리스크'와 '일일 손실 한도'가 어긋나는 경우다.
+        일일 한도가 리스크보다 낮으면 첫 손절에서 하루가 끝나 버려서
+        연속 손절 규칙이 아예 작동하지 않는다.
+        """
+        out: list[str] = []
+        need = self.risk_pct * self.max_consecutive_losses
+        if self.max_daily_loss_pct < self.risk_pct:
+            out.append(
+                f"[모순] 일일 손실 한도 {self.max_daily_loss_pct}% < 거래당 리스크 "
+                f"{self.risk_pct}% → 첫 손절에서 그날이 끝난다")
+        elif self.max_daily_loss_pct < need:
+            out.append(
+                f"[주의] 일일 손실 한도 {self.max_daily_loss_pct}% < 리스크×연속손절 "
+                f"{need:.1f}% → 연속 손절 규칙보다 일일 한도가 먼저 걸린다")
+        if self.min_rr > self.target_rr:
+            out.append(f"[모순] min_rr {self.min_rr} > target_rr {self.target_rr}")
+        if self.max_sl_price and self.min_sl_price and self.min_sl_price >= self.max_sl_price:
+            out.append("[모순] min_sl_price >= max_sl_price → 모든 셋업이 기각된다")
+        if self.risk_pct > 3.0:
+            out.append(
+                f"[경고] 거래당 리스크 {self.risk_pct}% 는 파산 지향 설정이다. "
+                "소액 전용 계좌에서만 쓸 것")
+        if self.breakeven_at_r >= self.target_rr:
+            out.append(
+                f"[주의] 본절 이동 {self.breakeven_at_r}R 이 목표 {self.target_rr}R 이상 "
+                "→ 본절이 사실상 작동하지 않는다")
+        return out
+
 
 # ----------------------------------------------------------------------
-# 프리셋 — 채널이 계좌를 3종류로 나누는 방식 그대로
+# 프리셋 — 전부 XAUUSD 기준으로 조정되어 있다.
+#
+# 손절 폭 가드는 '금 달러' 단위다. 금은 M5 ATR 이 대략 $1.5~4,
+# H1 이 $4~10, D1 이 $25~40 수준이라 프레임마다 성격이 확연히 다르다.
+# 값은 전략을 방해하지 않을 만큼 넉넉하고, 헛발질은 걸러낼 만큼 좁게 잡았다.
+# 금 가격대가 크게 바뀌면(예: $2000 → $4000) 함께 넓혀야 한다.
 # ----------------------------------------------------------------------
 SWING = CrowConfig(
     name="swing",
     htf="D1", mtf="H4", ltf="H1",
     risk_pct=1.0, target_rr=5.0, min_rr=3.0,
     max_trades_per_day=2, limit_expiry_bars=24,   # H1 24봉 = 하루 ("걸어두고 잔다")
+    min_sl_price=6.0, max_sl_price=60.0,          # 금 스윙: $6~60 손절
+    max_spread_ratio=0.04,
+    max_daily_loss_pct=3.0,
+)
+
+# 금에 가장 무난한 프레임. 런던·뉴욕 세션 안에서 대부분 결판난다.
+INTRADAY = CrowConfig(
+    name="intraday",
+    htf="H4", mtf="H1", ltf="M15",
+    risk_pct=1.0, target_rr=3.0, min_rr=2.0,
+    max_trades_per_day=3, limit_expiry_bars=32,   # M15 32봉 = 8시간
+    sl_buffer_atr=0.3,
+    min_sl_price=2.5, max_sl_price=25.0,
+    max_spread_ratio=0.08,
+    max_daily_loss_pct=3.0,
 )
 
 SCALP = CrowConfig(
     name="scalp",
     htf="H1", mtf="M15", ltf="M5",
     risk_pct=0.5, target_rr=3.0, min_rr=2.0,
-    max_trades_per_day=8, limit_expiry_bars=96,   # M5 96봉 = 8시간 (세션 내내 유효)
+    max_trades_per_day=6, limit_expiry_bars=96,   # M5 96봉 = 8시간 (세션 내내 유효)
     sl_buffer_atr=0.25,
+    min_sl_price=1.5, max_sl_price=10.0,
+    max_spread_ratio=0.12,
+    max_daily_loss_pct=2.0,
 )
 
 # [출처] "M1 은 SL 이 2~3핍이라 스프레드에 죽는다 → 소액 고위험 계좌로만"
+#        "X10 sau 2 ngày" — 2일 만에 10배. 반대로 2일 만에 0이 될 수도 있다.
+# 채널이 말한 6% 리스크를 그대로 두되, 일일 한도를 리스크×연속손절에 맞춰
+# 규칙끼리 모순되지 않게 했다 (6% × 3회 = 18%).
 HIGH_RISK = CrowConfig(
     name="highrisk",
     htf="M15", mtf="M5", ltf="M1",
-    risk_pct=6.0, target_rr=3.0, min_rr=1.0,
+    risk_pct=6.0, target_rr=3.0, min_rr=1.5,
     max_trades_per_day=20, max_consecutive_losses=3,
-    limit_expiry_bars=10, sl_buffer_atr=0.2, max_leverage=20,
+    max_daily_loss_pct=18.0,
+    limit_expiry_bars=30, sl_buffer_atr=0.2, max_leverage=20,
+    min_sl_price=0.8, max_sl_price=4.0,
+    max_spread_ratio=0.20,
 )
 
 PRESETS: dict[str, CrowConfig] = {
     "swing": SWING,
+    "intraday": INTRADAY,
     "scalp": SCALP,
     "highrisk": HIGH_RISK,
 }
 
-DEFAULT = SCALP
+DEFAULT = INTRADAY
 
 
 def preset(name: str) -> CrowConfig:

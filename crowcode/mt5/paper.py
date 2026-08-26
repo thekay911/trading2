@@ -132,6 +132,9 @@ class PaperBroker:
     def symbol(self, name: str) -> SymbolInfo:
         return self.info
 
+    def list_symbols(self) -> list[str]:
+        return [self.info.name]
+
     def rates(self, symbol: str, timeframe: str, count: int) -> Series:
         from crowcode.data import resample
 

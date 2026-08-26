@@ -2,12 +2,14 @@
 
 Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0) 에 공개된
 매매 방식을 **하나의 실행 가능한 규칙 엔진**으로 정리한 것이다.
+대상은 **XAUUSD(금) 전용** — 프리셋의 손절 폭, 스프레드 필터, 필요 자본이 전부 금 기준이다.
 
 채널 글은 대부분 차트 이미지 + 짧은 코멘트라서, 흩어져 있는 규칙을
 탑다운 파이프라인 하나로 묶고 파라미터화했다.
 
 - 규칙 원문 ↔ 코드 대응표: **[docs/RULEBOOK.md](docs/RULEBOOK.md)**
 - MT5 에 붙이는 방법: **[docs/MT5_SETUP.md](docs/MT5_SETUP.md)**
+- XAUUSD 전용 설정(단위·자본·스프레드·스왑): **[docs/GOLD.md](docs/GOLD.md)**
 - 외부 의존성 없음 (Python 3.10+ 표준 라이브러리만)
 
 ---
@@ -40,17 +42,34 @@ Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0
 
 ```bash
 git clone <repo> && cd trading2
-python3 -m unittest discover -s tests -t .     # 126개 테스트
+python3 -m unittest discover -s tests -t .     # 162개 테스트
 python3 examples/quickstart.py                 # 데이터 없이 바로 실행되는 예제
 ```
 
 `data/sample_xauusd_m1.csv` 는 **합성 데이터**다 (CSV 경로 확인용, 실제 시세 아님).
 
-### 프리셋 규칙 확인
+### 금 기준 수치와 프리셋 확인
 
 ```bash
-python3 -m crowcode rules --preset scalp
+python3 -m crowcode gold                    # 단위, 프리셋별 손절 폭·필요 자본, 주요 지표
+python3 -m crowcode rules --preset intraday # 파라미터 전체
 ```
+
+```
+프리셋별 손절 폭 가드와 최소 필요 자본
+  swing     D1>H4>H1   리스크  1.0%  손절 $ 6.00~$60.00  필요 자본      600 ~     6,000
+  intraday  H4>H1>M15  리스크  1.0%  손절 $ 2.50~$25.00  필요 자본      250 ~     2,500
+  scalp     H1>M15>M5   리스크  0.5%  손절 $ 1.50~$10.00  필요 자본      300 ~     2,000
+  highrisk  M15>M5>M1   리스크  6.0%  손절 $ 0.80~$4.00   필요 자본       13 ~        67
+```
+
+### 사전 점검 — 계좌·브로커가 이 설정을 감당하는지
+
+```bash
+python3 -m crowcode preflight --paper --preset intraday --balance 3000
+```
+
+심볼 이름, 계약 크기, 브로커 최소 이격, 스프레드, 필요 자본, 설정 모순을 한 번에 본다.
 
 ### 계좌 3분할 (채널의 "스윙/스캘핑/고위험 계좌 분리")
 
@@ -103,8 +122,9 @@ python3 -m crowcode demo        # 세 프리셋 전부 합성 데이터로 실�
 ### A. MQL5 EA — Python 없이 차트에 부착
 
 `mql5/Experts/CrowConcept.mq5` 를 데이터 폴더의 `MQL5/Experts/` 에 넣고
-MetaEditor 에서 F7 로 컴파일한 뒤 차트에 드래그한다.
-`InpDryRun=true` 로 두면 주문 없이 로그만 남기므로 먼저 이걸로 검증한다.
+MetaEditor 에서 F7 로 컴파일한 뒤 **금 차트**에 드래그한다.
+EA 속성창에서 `mql5/Presets/CrowConcept-intraday.set` 을 불러오면 설정이 끝난다.
+전부 `InpDryRun=true` 로 저장되어 있어 주문 없이 로그만 남긴다 — 먼저 이걸로 검증한다.
 
 ```
 CrowConcept SIGNAL BUY LIMIT | entry=1948.58 sl=1947.83 tp=1950.81 rr=1:3.0 lots=0.06 zone=fvg
@@ -173,6 +193,7 @@ print(res.report())
 | `waves.py` | 지그재그 레그, 엘리엇 3규칙 검증, ABC 조정 완료 판정 |
 | `sessions.py` | 세션 창, 뉴스 블랙아웃, 금요일 마감 |
 | `risk.py` | 사이징, 레버리지 상한, 본절/분할, 일일 한도, 계좌 3분할 |
+| `gold.py` | XAUUSD 전용 — 심볼 이름 해석, 필요 자본, 사전 점검, 지표 목록 |
 | `strategy.py` | 위 전부를 묶는 탑다운 파이프라인 |
 | `backtest.py` | 이벤트 기반 백테스터 (SL 우선 체결, 스프레드 반영) |
 | `mt5/broker.py` | 브로커 인터페이스 + 심볼 사양(랏 단위, 최소 이격, 틱 가치) |
@@ -181,6 +202,7 @@ print(res.report())
 | `mt5/runner.py` | 실전 루프 — 관리 → 대기주문 → 리스크 → 평가 → 전송 |
 | `mt5/journal.py` | JSONL 기록 (기각 사유 집계 포함) |
 | `mql5/Experts/CrowConcept.mq5` | 같은 규칙의 네이티브 EA |
+| `mql5/Presets/*.set` | EA 프리셋 (config.py 에서 자동 생성) |
 
 ---
 

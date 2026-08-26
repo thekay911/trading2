@@ -311,6 +311,15 @@ class LiveRunner:
                                detail=f"SL/TP 가 최소 이격 {gap} 미만")
             return
 
+        sl_dist = abs(entry - sl)
+        if self.cfg.max_spread_ratio > 0:
+            spread = tick.spread
+            if spread > sl_dist * self.cfg.max_spread_ratio:
+                self.journal.write("reject", rule="spread_ratio",
+                                   detail=f"스프레드 {spread:.2f} > 손절폭 {sl_dist:.2f} × "
+                                          f"{self.cfg.max_spread_ratio}")
+                return
+
         lots, risk_amt = position_size(acct.balance, self.cfg.risk_pct, entry, sl, self.cfg)
         lots = info.normalize_volume(lots)
         if lots <= 0:

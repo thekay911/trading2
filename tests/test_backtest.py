@@ -137,3 +137,36 @@ class TestDailyLimits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGoldSwap(unittest.TestCase):
+    """금은 스왑이 크게 마이너스라 며칠 보유하면 성과가 뒤집힌다."""
+
+    def _pos(self, opened):
+        return ManagedPosition("buy", 1950.0, 1945.0, 1975.0, 0.10, 5.0, opened)
+
+    def test_no_swap_when_closed_same_day(self):
+        bt = Backtester(SCALP, spread=0.0, swap_per_lot_night=-10.0)
+        pos = self._pos(datetime(2024, 1, 8, 9, 0, tzinfo=timezone.utc))
+        self.assertEqual(bt._swap_cost(pos, datetime(2024, 1, 8, 17, 0, tzinfo=timezone.utc)), 0.0)
+
+    def test_one_night_charged_once(self):
+        bt = Backtester(SCALP, spread=0.0, swap_per_lot_night=-10.0)
+        pos = self._pos(datetime(2024, 1, 8, 9, 0, tzinfo=timezone.utc))   # 월 → 화
+        self.assertAlmostEqual(
+            bt._swap_cost(pos, datetime(2024, 1, 9, 9, 0, tzinfo=timezone.utc)), -1.0)
+
+    def test_wednesday_rollover_is_tripled(self):
+        bt = Backtester(SCALP, spread=0.0, swap_per_lot_night=-10.0)
+        pos = self._pos(datetime(2024, 1, 9, 9, 0, tzinfo=timezone.utc))   # 화 → 수
+        self.assertAlmostEqual(
+            bt._swap_cost(pos, datetime(2024, 1, 10, 9, 0, tzinfo=timezone.utc)), -3.0)
+
+    def test_swap_reduces_a_winning_trade(self):
+        bt = Backtester(SCALP, spread=0.0, swap_per_lot_night=-10.0)
+        pos = self._pos(datetime(2024, 1, 8, 9, 0, tzinfo=timezone.utc))
+        tr = Trade(signal=dummy_signal(), opened_at=pos.opened_at)
+        risk = RiskState(balance=1000.0)
+        bt._close(pos, tr, 1955.0, datetime(2024, 1, 12, 9, 0, tzinfo=timezone.utc), risk, "tp")
+        gross = 5.0 * 0.10 * SCALP.contract_size          # +50
+        self.assertLess(tr.pnl, gross)

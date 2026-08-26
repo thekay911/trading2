@@ -127,6 +127,10 @@ class Mt5Broker:
             tick_size=float(getattr(s, "trade_tick_size", 0.0)),
         )
 
+    def list_symbols(self) -> list[str]:
+        syms = self.mt5.symbols_get()
+        return [s.name for s in syms] if syms else []
+
     def rates(self, symbol: str, timeframe: str, count: int) -> Series:
         tf = getattr(self.mt5, _TF_NAMES[timeframe.upper()])
         # 0번은 형성 중인 봉 → 하나 더 받아서 잘라낸다.

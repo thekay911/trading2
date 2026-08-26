@@ -184,6 +184,17 @@ class CrowStrategy:
             f"진입 POI: {poi.kind} {poi.bottom:.3f}~{poi.top:.3f} ({'즉시' if order_type == 'market' else '지정가'})")
 
         sl = self._stop(side, entry, poi, sweep, a_ltf, cfg)
+
+        # 금은 프레임마다 손절 폭 성격이 뚜렷하다. 범위를 벗어나면 그 셋업은
+        # 이 프리셋의 것이 아니다 (M5 셋업에 $30 손절이 나오면 뭔가 잘못된 것).
+        sl_dist = abs(entry - sl)
+        if cfg.min_sl_price and sl_dist < cfg.min_sl_price:
+            return self._reject(now.ts, "sl_too_tight",
+                                f"손절 폭 {sl_dist:.2f} < 최소 {cfg.min_sl_price}")
+        if cfg.max_sl_price and sl_dist > cfg.max_sl_price:
+            return self._reject(now.ts, "sl_too_wide",
+                                f"손절 폭 {sl_dist:.2f} > 최대 {cfg.max_sl_price}")
+
         tp = self._target(side, entry, sl, mtf_c, sw, cfg, a_ltf)
 
         ok, rr = validate_rr(entry, sl, tp, side, cfg.min_rr)

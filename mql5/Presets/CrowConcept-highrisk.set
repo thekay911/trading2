@@ -1,0 +1,39 @@
+; CrowConcept preset: highrisk  (generated from crowcode/config.py)
+; M15 > M5 > M1 | risk 6.0% | stop $0.8-$4.0
+; Load in MT5: EA properties -> Load, then set InpDryRun=true for the first weeks.
+
+InpHTF=15
+InpMTF=5
+InpLTF=1
+InpSwingLeft=2
+InpSwingRight=2
+InpBreakOnClose=true
+InpRequireSweep=true
+InpRequireChoch=true
+InpSweepLookback=60
+InpUseOrderBlocks=true
+InpUseFVG=true
+InpMarketIfAtZone=true
+InpSlBufferATR=0.2
+InpMaxEntryDistATR=3.0
+InpLimitExpiryBars=30
+InpMinSLPrice=0.8
+InpMaxSLPrice=4.0
+InpMaxSpreadRatio=0.2
+InpRiskPercent=6.0
+InpMinRR=1.5
+InpTargetRR=3.0
+InpBreakevenAtR=2.0
+InpPartialAtR=3.0
+InpPartialFraction=0.5
+InpMaxTradesPerDay=20
+InpMaxConsecLosses=3
+InpMaxDailyLossPct=18.0
+InpSession1Start=7.0
+InpSession1End=12.0
+InpSession2Start=12.0
+InpSession2End=17.0
+InpBlockFridayClose=true
+InpNewsBeforeMin=15
+InpNewsAfterMin=30
+InpDryRun=true

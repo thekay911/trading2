@@ -6,6 +6,7 @@
   · 손절은 뒤로 밀지 않음
   · 연속 손절 / 일일 한도 도달 시 그날 매매 중단
   · 스프레드 반영 ("M1 은 스프레드에 죽는다" 를 수치로 확인)
+  · 스왑(보유 비용) 반영 — 금은 스왑이 크게 마이너스라 스윙 성과를 좌우한다
 
 같은 봉 안에서 SL·TP 가 모두 닿으면 항상 SL 을 먼저 체결한 것으로 본다
 (낙관적 결과 방지).
@@ -14,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Sequence
 
 from crowcode.config import CrowConfig, DEFAULT
@@ -118,6 +119,7 @@ class Backtester:
         balance: float = 1000.0,
         symbol: str = "XAUUSD",
         spread: float = 0.20,
+        swap_per_lot_night: float = 0.0,   # 금 스왑은 보통 음수 (보유 비용)
         news: Sequence[NewsEvent] = (),
         warmup: int = 400,
         eval_every: int = 1,
@@ -126,6 +128,7 @@ class Backtester:
         self.start_balance = balance
         self.symbol = symbol
         self.spread = spread
+        self.swap_per_lot_night = swap_per_lot_night
         self.news = list(news)
         self.warmup = warmup
         self.eval_every = max(1, eval_every)
@@ -177,6 +180,8 @@ class Backtester:
             # 3) 신규 시그널 탐색
             if pos is None and pending is None and (i % self.eval_every == 0):
                 sig = strat.evaluate(view, risk.balance, risk, now_ts=c.ts)
+                if sig is not None and self._spread_too_costly(sig):
+                    sig = None
                 if sig is not None:
                     if sig.order_type == "market":
                         entry = c.close + (self.spread if sig.side == "buy" else -self.spread)
@@ -193,6 +198,13 @@ class Backtester:
                               strat.rejection_summary())
 
     # ------------------------------------------------------------------
+    def _spread_too_costly(self, sig: Signal) -> bool:
+        """스프레드가 손절폭 대비 과하면 그 셋업은 애초에 기댓값이 없다."""
+        ratio = self.cfg.max_spread_ratio
+        if ratio <= 0 or self.spread <= 0:
+            return False
+        return self.spread > sig.risk_per_unit * ratio
+
     def _try_fill(self, s: Signal, c) -> float | None:
         """지정가 체결. 매수는 ask, 매도는 bid 기준으로 스프레드를 얹는다."""
         if s.side == "buy" and c.low <= s.entry:
@@ -230,9 +242,21 @@ class Backtester:
                 risk.pnl_today += pnl
         return False
 
+    def _swap_cost(self, pos: ManagedPosition, ts: datetime) -> float:
+        """보유 일수만큼의 스왑. 수요일은 3배(주말 이자 선반영)로 계산한다."""
+        if self.swap_per_lot_night == 0.0:
+            return 0.0
+        nights = 0
+        day = pos.opened_at.date()
+        end = ts.date()
+        while day < end:
+            day = day + timedelta(days=1)
+            nights += 3 if day.weekday() == 2 else 1   # 수요일 롤오버는 3배
+        return self.swap_per_lot_night * pos.lots * nights
+
     def _close(self, pos: ManagedPosition, tr: Trade, price: float,
                ts: datetime, risk: RiskState, outcome: str) -> None:
-        pnl = self._pnl(pos, price, pos.remaining)
+        pnl = self._pnl(pos, price, pos.remaining) + self._swap_cost(pos, ts)
         tr.pnl += pnl
         tr.exit_price = price
         tr.closed_at = ts

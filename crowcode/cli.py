@@ -17,10 +17,16 @@ import json
 import sys
 
 from crowcode.config import PRESETS, preset
+from crowcode.gold import CANONICAL, movers_table, parse_news, preflight, resolve_symbol
 from crowcode.data import load_csv, synthetic
 from crowcode.risk import RiskState, split_capital
 from crowcode.strategy import CrowStrategy
 from crowcode.backtest import Backtester
+
+
+def _news(args):
+    spec = getattr(args, "news", None)
+    return parse_news(spec) if spec else []
 
 
 def _series(args):
@@ -32,7 +38,7 @@ def _series(args):
 def cmd_signal(args) -> int:
     cfg = preset(args.preset)
     s = _series(args)
-    strat = CrowStrategy(cfg, args.symbol)
+    strat = CrowStrategy(cfg, args.symbol, _news(args))
     sig = strat.evaluate(s, args.balance, RiskState(balance=args.balance))
     if sig is None:
         last = strat.rejections[-1] if strat.rejections else None
@@ -46,6 +52,7 @@ def cmd_backtest(args) -> int:
     cfg = preset(args.preset)
     s = _series(args)
     bt = Backtester(cfg, args.balance, args.symbol, spread=args.spread,
+                    swap_per_lot_night=args.swap, news=_news(args),
                     warmup=args.warmup, eval_every=args.eval_every)
     res = bt.run(s)
     print(res.report())
@@ -77,6 +84,7 @@ def cmd_split(args) -> int:
 # 프리셋별 데모 데이터: 스윙은 D1 편향이 필요하므로 더 긴 기간을 M15 로 만든다.
 _DEMO_DATA = {
     "swing": dict(bars=9000, minutes=15, warmup=600, eval_every=2),
+    "intraday": dict(bars=9000, minutes=5, warmup=600, eval_every=3),
     "scalp": dict(bars=25000, minutes=1, warmup=800, eval_every=5),
     "highrisk": dict(bars=25000, minutes=1, warmup=800, eval_every=5),
 }
@@ -93,10 +101,11 @@ def cmd_live(args) -> int:
         max_spread_points=args.max_spread,
     )
     journal = Journal(args.journal, echo=True)
+    news = _news(args)
 
     if args.paper:
         broker = PaperBroker(_series(args), balance=args.balance, start_index=args.warmup)
-        runner = LiveRunner(broker, live, cfg, journal)
+        runner = LiveRunner(broker, live, cfg, journal, news)
         n = 0
         while broker.advance():
             if runner.step():
@@ -114,10 +123,73 @@ def cmd_live(args) -> int:
                        terminal_path=args.terminal_path,
                        server_utc_offset=args.server_offset)
     try:
-        runner = LiveRunner(broker, live, cfg, journal)
+        live.symbol = _resolve(broker, args.symbol)
+        print(preflight(cfg, broker.symbol(live.symbol), broker.account().balance,
+                        broker.tick(live.symbol).spread).report())
+        runner = LiveRunner(broker, live, cfg, journal, news)
         runner.run(max_iterations=1 if args.once else None)
     finally:
         broker.shutdown()
+    return 0
+
+
+def _resolve(broker, requested: str) -> str:
+    """브로커마다 다른 금 심볼 이름(XAUUSD / XAUUSD.m / GOLD ...)을 맞춰 준다."""
+    names = broker.list_symbols()
+    if requested and requested.lower() != "auto" and requested in names:
+        return requested
+    found = resolve_symbol(names)
+    if found is None:
+        raise RuntimeError(
+            f"금 심볼을 찾지 못했습니다. 마켓워치에서 정확한 이름을 확인해 "
+            f"--symbol 로 지정하세요. (요청: {requested})")
+    if requested and requested.lower() != "auto" and found != requested:
+        print(f"심볼 자동 보정: {requested} → {found}")
+    return found
+
+
+def cmd_preflight(args) -> int:
+    cfg = preset(args.preset)
+    if args.paper:
+        from crowcode.mt5.paper import XAUUSD
+        print(preflight(cfg, XAUUSD, args.balance, args.spread).report())
+        return 0
+
+    from crowcode.mt5.terminal import Mt5Broker
+
+    broker = Mt5Broker(login=args.login, password=args.password, server=args.server,
+                       terminal_path=args.terminal_path,
+                       server_utc_offset=args.server_offset)
+    try:
+        sym = _resolve(broker, args.symbol)
+        acct = broker.account()
+        rep = preflight(cfg, broker.symbol(sym), acct.balance, broker.tick(sym).spread)
+        print(rep.report())
+        return 1 if rep.failed else 0
+    finally:
+        broker.shutdown()
+
+
+def cmd_gold(args) -> int:
+    from crowcode.gold import REFERENCE
+
+    print("XAUUSD 기준 수치")
+    print(f"  1랏 = {REFERENCE.contract_size:.0f} oz  →  $1 움직임 = "
+          f"${REFERENCE.money_per_dollar_per_lot:.0f} / 랏")
+    print(f"  0.01랏이면 $1 움직임 = $1  (호가 단위 {REFERENCE.point}, MT5 포인트 1 = $0.01)")
+    print(f"  전형적 스프레드 {REFERENCE.typical_spread_points} 포인트 "
+          f"(${REFERENCE.typical_spread_points * REFERENCE.point:.2f})")
+    print()
+    print("프리셋별 손절 폭 가드와 최소 필요 자본")
+    from crowcode.gold import min_viable_balance
+    for name, c in PRESETS.items():
+        lo = min_viable_balance(c, c.min_sl_price)
+        hi = min_viable_balance(c, c.max_sl_price)
+        print(f"  {name:<9} {c.htf}>{c.mtf}>{c.ltf:<4} 리스크 {c.risk_pct:>4.1f}%  "
+              f"손절 ${c.min_sl_price:>5.2f}~${c.max_sl_price:<6.2f} "
+              f"필요 자본 {lo:>8,.0f} ~ {hi:>9,.0f}")
+    print()
+    print(movers_table())
     return 0
 
 
@@ -136,14 +208,17 @@ def cmd_demo(args) -> int:
 
 def main(argv=None) -> int:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--preset", default="scalp", choices=sorted(PRESETS))
+    common.add_argument("--preset", default="intraday", choices=sorted(PRESETS))
     common.add_argument("--csv", help="time,open,high,low,close[,volume] CSV")
-    common.add_argument("--symbol", default="XAUUSD")
+    common.add_argument("--symbol", default=CANONICAL,
+                        help="금 심볼. 'auto' 로 두면 마켓워치에서 찾아낸다")
     common.add_argument("--timeframe", default="M1", help="CSV 의 기준 타임프레임")
     common.add_argument("--balance", type=float, default=1000.0)
     common.add_argument("--bars", type=int, default=6000, help="CSV 미지정 시 합성 봉 수")
     common.add_argument("--base-minutes", type=int, default=1, dest="base_minutes",
                         help="합성 데이터의 기준 봉 길이(분)")
+    common.add_argument("--news", default="",
+                        help="차단할 지표 시각(GMT). 예: \"CPI@2026-09-11 12:30, 2026-10-02 12:30\"")
 
     p = argparse.ArgumentParser("crowcode", description="Crow Concept 트레이딩 규칙 엔진",
                                 parents=[common])
@@ -154,7 +229,9 @@ def main(argv=None) -> int:
     s1.set_defaults(func=cmd_signal)
 
     s2 = sub.add_parser("backtest", help="규칙 그대로 백테스트", parents=[common])
-    s2.add_argument("--spread", type=float, default=0.20)
+    s2.add_argument("--spread", type=float, default=0.25, help="스프레드(금 달러)")
+    s2.add_argument("--swap", type=float, default=0.0,
+                    help="1랏 1박당 스왑(계좌 통화). 금은 보통 음수, 예: -12")
     s2.add_argument("--warmup", type=int, default=600)
     s2.add_argument("--eval-every", type=int, default=5, dest="eval_every")
     s2.add_argument("--trades", action="store_true")
@@ -190,6 +267,19 @@ def main(argv=None) -> int:
     s6.add_argument("--server-offset", type=float, dest="server_offset",
                     help="서버시간 - UTC (시간). 생략하면 자동 추정")
     s6.set_defaults(func=cmd_live)
+
+    s7 = sub.add_parser("preflight", help="브로커·계좌·프리셋 조합 사전 점검", parents=[common])
+    s7.add_argument("--paper", action="store_true", help="표준 XAUUSD 사양으로 점검")
+    s7.add_argument("--spread", type=float, default=0.25, help="--paper 시 가정 스프레드(달러)")
+    s7.add_argument("--login", type=int)
+    s7.add_argument("--password")
+    s7.add_argument("--server")
+    s7.add_argument("--terminal-path", dest="terminal_path")
+    s7.add_argument("--server-offset", type=float, dest="server_offset")
+    s7.set_defaults(func=cmd_preflight)
+
+    s8 = sub.add_parser("gold", help="XAUUSD 기준 수치와 필요 자본", parents=[common])
+    s8.set_defaults(func=cmd_gold)
 
     args = p.parse_args(argv)
     return args.func(args)

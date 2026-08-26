@@ -22,9 +22,9 @@
 // Inputs
 //====================================================================
 input group "=== Timeframes (top-down) ==="
-input ENUM_TIMEFRAMES  InpHTF              = PERIOD_H1;   // HTF: direction
-input ENUM_TIMEFRAMES  InpMTF              = PERIOD_M15;  // MTF: zone (POI)
-input ENUM_TIMEFRAMES  InpLTF              = PERIOD_M5;   // LTF: trigger
+input ENUM_TIMEFRAMES  InpHTF              = PERIOD_H4;   // HTF: direction
+input ENUM_TIMEFRAMES  InpMTF              = PERIOD_H1;   // MTF: zone (POI)
+input ENUM_TIMEFRAMES  InpLTF              = PERIOD_M15;  // LTF: trigger
 
 input group "=== Structure ==="
 input int              InpSwingLeft        = 2;           // fractal bars left
@@ -43,16 +43,21 @@ input bool             InpUseFVG           = true;        // zone type: fair val
 input bool             InpMarketIfAtZone   = true;        // enter at market inside zone
 input double           InpSlBufferATR      = 0.35;        // SL buffer (LTF ATR)
 input double           InpMaxEntryDistATR  = 3.0;         // skip zones further than this
-input int              InpLimitExpiryBars  = 96;          // pending expiry in LTF bars
+input int              InpLimitExpiryBars  = 32;          // pending expiry in LTF bars
+
+input group "=== XAUUSD stop guards (price = gold dollars) ==="
+input double           InpMinSLPrice       = 2.50;        // reject stops tighter than this
+input double           InpMaxSLPrice       = 25.00;       // reject stops wider than this
+input double           InpMaxSpreadRatio   = 0.08;        // max spread / stop distance
 
 input group "=== Risk management ==="
-input double           InpRiskPercent      = 0.5;         // risk per trade (% balance)
+input double           InpRiskPercent      = 1.0;         // risk per trade (% balance)
 input double           InpMinRR            = 2.0;         // minimum reward:risk
 input double           InpTargetRR         = 3.0;         // fixed target when no liquidity
 input double           InpBreakevenAtR     = 2.0;         // move SL to entry at this R
 input double           InpPartialAtR       = 3.0;         // partial close at this R
 input double           InpPartialFraction  = 0.5;         // fraction closed
-input int              InpMaxTradesPerDay  = 5;           // hard cap
+input int              InpMaxTradesPerDay  = 3;           // hard cap
 input int              InpMaxConsecLosses  = 2;           // stop the day after N losses
 input double           InpMaxDailyLossPct  = 3.0;         // stop the day at this drawdown
 input int              InpBeBufferPoints   = 10;          // breakeven buffer (points)
@@ -68,7 +73,7 @@ input double           InpFridayCutoff     = 19.0;        // GMT hour
 input string           InpNewsTimes        = "";          // "2024.02.02 13:30;..." (GMT)
 input int              InpNewsBeforeMin    = 15;          // blackout before news
 input int              InpNewsAfterMin     = 30;          // blackout after news
-input int              InpMaxSpreadPoints  = 60;          // skip when spread is wider
+input int              InpMaxSpreadPoints  = 40;          // skip when spread is wider
 
 input group "=== Execution ==="
 input long             InpMagic            = 700911;      // magic number
@@ -154,6 +159,18 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
      }
 
+   if(InpMinSLPrice > 0.0 && InpMaxSLPrice > 0.0 && InpMinSLPrice >= InpMaxSLPrice)
+     {
+      Print("CrowConcept: InpMinSLPrice must be smaller than InpMaxSLPrice");
+      return(INIT_PARAMETERS_INCORRECT);
+     }
+   if(InpMaxDailyLossPct < InpRiskPercent)
+      PrintFormat("CrowConcept WARNING: daily loss cap %.1f%% is below per-trade risk %.1f%% "
+                  "- the first loss would end the day",
+                  InpMaxDailyLossPct, InpRiskPercent);
+
+   GoldSanityCheck();
+
    PrintFormat("CrowConcept ready | %s | HTF=%s MTF=%s LTF=%s | risk=%.2f%% | dry_run=%s",
                g_sym, EnumToString(InpHTF), EnumToString(InpMTF), EnumToString(InpLTF),
                InpRiskPercent, (InpDryRun ? "true" : "false"));
@@ -161,6 +178,50 @@ int OnInit()
   }
 
 void OnDeinit(const int reason) { }
+
+//+------------------------------------------------------------------+
+//| XAUUSD specific startup checks.                                  |
+//| Most "the EA never trades" reports come down to one of these.    |
+//+------------------------------------------------------------------+
+void GoldSanityCheck()
+  {
+   double perUnit = MoneyPerPriceUnit(1.0);
+   if(MathAbs(perUnit - 100.0) > 1.0)
+      PrintFormat("CrowConcept WARNING: 1 lot moves %.2f per $1 (gold standard is 100). "
+                  "Wrong symbol, or a micro/cent account?", perUnit);
+
+   //--- can the account even afford the smallest setup this preset allows?
+   double vmin = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MIN);
+   double bal  = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(InpMinSLPrice > 0.0 && InpRiskPercent > 0.0 && perUnit > 0.0)
+     {
+      double needMin = vmin * InpMinSLPrice * perUnit * 100.0 / InpRiskPercent;
+      double needMax = vmin * InpMaxSLPrice * perUnit * 100.0 / InpRiskPercent;
+      PrintFormat("CrowConcept: balance needed %.0f (stop $%.2f) .. %.0f (stop $%.2f); you have %.0f",
+                  needMin, InpMinSLPrice, needMax, InpMaxSLPrice, bal);
+      if(bal < needMin)
+         PrintFormat("CrowConcept WARNING: balance below %.0f - every signal will be "
+                     "rejected for size. Raise risk %% or use a higher timeframe preset.", needMin);
+     }
+
+   //--- broker stop distance vs the tightest stop we would ever place
+   double stopDist = MinStopDistance();
+   if(InpMinSLPrice > 0.0 && stopDist >= InpMinSLPrice)
+      PrintFormat("CrowConcept WARNING: broker minimum stop distance $%.2f >= InpMinSLPrice $%.2f "
+                  "- orders will be rejected. Widen InpMinSLPrice or change preset.",
+                  stopDist, InpMinSLPrice);
+
+   //--- typical spread vs the tightest stop
+   long spread = SymbolInfoInteger(g_sym, SYMBOL_SPREAD);
+   if(InpMaxSpreadRatio > 0.0 && InpMinSLPrice > 0.0)
+     {
+      double allowed = InpMinSLPrice * InpMaxSpreadRatio;
+      if(spread * g_point > allowed)
+         PrintFormat("CrowConcept NOTE: spread $%.2f exceeds $%.2f allowed for the tightest "
+                     "setup - narrow-stop signals will be filtered out.",
+                     spread * g_point, allowed);
+     }
+  }
 
 //+------------------------------------------------------------------+
 //| Main loop: manage first, then look for a new setup.              |
@@ -897,6 +958,24 @@ void TryNewSetup()
 
    double risk = MathAbs(entry - sl);
    if(risk <= 0.0)                { Reject("rr", "degenerate stop"); return; }
+
+   //--- gold stop guards: an M15 setup with a $40 stop means something went wrong
+   if(InpMinSLPrice > 0.0 && risk < InpMinSLPrice)
+     { Reject("sl_too_tight", StringFormat("stop $%.2f below the $%.2f floor", risk, InpMinSLPrice)); return; }
+   if(InpMaxSLPrice > 0.0 && risk > InpMaxSLPrice)
+     { Reject("sl_too_wide", StringFormat("stop $%.2f above the $%.2f cap", risk, InpMaxSLPrice)); return; }
+
+   //--- "M1 dies to the spread": price the cost against the stop, not in isolation
+   if(InpMaxSpreadRatio > 0.0)
+     {
+      double spreadPrice = (ask - bid);
+      if(spreadPrice > risk * InpMaxSpreadRatio)
+        {
+         Reject("spread_ratio", StringFormat("spread $%.2f > %.0f%% of the $%.2f stop",
+                                             spreadPrice, InpMaxSpreadRatio * 100.0, risk));
+         return;
+        }
+     }
    double tp = (dir == DIR_BULL) ? entry + risk * InpTargetRR
                                  : entry - risk * InpTargetRR;
    double rr = MathAbs(tp - entry) / risk;
