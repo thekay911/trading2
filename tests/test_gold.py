@@ -211,3 +211,19 @@ class TestSetFilesMatchPresets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSafeDefaults(unittest.TestCase):
+    """주문이 나가는 스위치는 항상 '꺼짐'이 기본이어야 한다."""
+
+    def test_ea_source_defaults_to_dry_run(self):
+        with open(MQL, encoding="utf-8") as fh:
+            src = fh.read()
+        m = re.search(r"input\s+bool\s+InpDryRun\s*=\s*(\w+)", src)
+        self.assertIsNotNone(m, "InpDryRun 입력을 찾지 못함")
+        self.assertEqual(m.group(1), "true",
+                         "EA 를 .set 없이 차트에 붙이면 바로 실주문이 나간다")
+
+    def test_python_runner_defaults_to_dry_run(self):
+        from crowcode.mt5.runner import LiveConfig
+        self.assertTrue(LiveConfig().dry_run)

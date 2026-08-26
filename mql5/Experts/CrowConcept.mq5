@@ -79,7 +79,7 @@ input group "=== Execution ==="
 input long             InpMagic            = 700911;      // magic number
 input int              InpDeviation        = 20;          // slippage (points)
 input string           InpComment          = "crowcode";  // order comment
-input bool             InpDryRun           = false;       // log only, send nothing
+input bool             InpDryRun           = true;        // SAFE DEFAULT: log only, send nothing
 input bool             InpVerbose          = true;        // print rejection reasons
 
 //====================================================================
@@ -170,6 +170,13 @@ int OnInit()
                   InpMaxDailyLossPct, InpRiskPercent);
 
    GoldSanityCheck();
+
+   if(InpDryRun)
+      Print("CrowConcept: DRY RUN - signals are logged, no orders are sent. "
+            "Set InpDryRun=false only after demo testing.");
+   else
+      PrintFormat("CrowConcept: *** LIVE ORDERS ENABLED *** %s risk=%.2f%% magic=%I64d",
+                  g_sym, InpRiskPercent, InpMagic);
 
    PrintFormat("CrowConcept ready | %s | HTF=%s MTF=%s LTF=%s | risk=%.2f%% | dry_run=%s",
                g_sym, EnumToString(InpHTF), EnumToString(InpMTF), EnumToString(InpLTF),
