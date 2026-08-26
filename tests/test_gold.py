@@ -49,9 +49,17 @@ class TestGoldMath(unittest.TestCase):
     def test_one_cent_lot_moves_one_dollar(self):
         self.assertAlmostEqual(REFERENCE.money_at(0.01, 1.0), 1.0)
 
-    def test_min_viable_balance(self):
-        # 0.5% 리스크, 손절 $5, 0.01랏 최소 → 최소 리스크 $5 → 잔고 $1,000
-        cfg = SCALP.with_(risk_pct=0.5)
+    def test_min_viable_balance_uses_the_risk_ceiling(self):
+        """진입을 막는 것은 목표 리스크%가 아니라 그 상한이다.
+
+        상한 안이면 최소 랏으로라도 들어가기 때문이다.
+        손절 $5, 0.01랏 → 최소 리스크 $5. 상한 2.5% 면 잔고 $200 이 필요하다.
+        """
+        cfg = SCALP.with_(risk_pct=0.5, max_risk_pct=2.5)
+        self.assertAlmostEqual(min_viable_balance(cfg, 5.0, XAUUSD), 200.0)
+
+    def test_min_viable_balance_falls_back_to_risk_pct(self):
+        cfg = SCALP.with_(risk_pct=0.5, max_risk_pct=0.0)
         self.assertAlmostEqual(min_viable_balance(cfg, 5.0, XAUUSD), 1000.0)
 
     def test_wider_stop_needs_more_capital(self):
@@ -150,7 +158,7 @@ class TestStopGuardsAreEnforced(unittest.TestCase):
         return out, st
 
     def test_no_signal_violates_the_stop_guards(self):
-        cfg = preset("scalp")
+        cfg = preset("intraday")
         sigs, _ = self._signals(cfg)
         self.assertTrue(sigs, "테스트할 시그널이 없음")
         for s in sigs:
@@ -158,7 +166,7 @@ class TestStopGuardsAreEnforced(unittest.TestCase):
             self.assertLessEqual(s.risk_per_unit, cfg.max_sl_price + 1e-9)
 
     def test_impossible_guard_rejects_everything(self):
-        cfg = preset("scalp").with_(min_sl_price=500.0, max_sl_price=900.0)
+        cfg = preset("intraday").with_(min_sl_price=500.0, max_sl_price=900.0)
         sigs, st = self._signals(cfg)
         self.assertEqual(sigs, [])
         self.assertIn("sl_too_tight", st.rejection_summary())

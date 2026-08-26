@@ -200,8 +200,9 @@ def cmd_live(args) -> int:
                        server_utc_offset=args.server_offset)
     try:
         live.symbol = _resolve(broker, args.symbol)
-        print(preflight(cfg, broker.symbol(live.symbol), broker.account().balance,
-                        broker.tick(live.symbol).spread).report())
+        _acct = broker.account()
+        print(preflight(cfg, broker.symbol(live.symbol), _acct.balance,
+                        broker.tick(live.symbol).spread, _acct.currency).report())
         runner = LiveRunner(broker, live, cfg, journal, news)
         runner.run(max_iterations=1 if args.once else None)
     finally:
@@ -239,7 +240,8 @@ def cmd_preflight(args) -> int:
     try:
         sym = _resolve(broker, args.symbol)
         acct = broker.account()
-        rep = preflight(cfg, broker.symbol(sym), acct.balance, broker.tick(sym).spread)
+        rep = preflight(cfg, broker.symbol(sym), acct.balance,
+                        broker.tick(sym).spread, acct.currency)
         print(rep.report())
         return 1 if rep.failed else 0
     finally:
@@ -251,6 +253,31 @@ def cmd_risk(args) -> int:
 
     cfg = _overrides(args, preset(args.preset))
     print(report(cfg, weeks=args.weeks, trades_per_week=args.per_week, paths=args.paths))
+    return 0
+
+
+def cmd_sizing(args) -> int:
+    from crowcode.gold import sizing_table
+    from crowcode.mt5.paper import XAUUSD
+
+    cfg = _overrides(args, preset(args.preset))
+    info = XAUUSD
+    if not args.paper:
+        try:
+            from crowcode.mt5.terminal import Mt5Broker
+
+            broker = Mt5Broker(login=args.login, password=args.password,
+                               server=args.server, terminal_path=args.terminal_path)
+            try:
+                sym = _resolve(broker, args.symbol)
+                info = broker.symbol(sym)
+                if args.balance == 1000.0:            # 기본값이면 실제 잔고를 쓴다
+                    args.balance = broker.account().balance
+            finally:
+                broker.shutdown()
+        except RuntimeError as exc:
+            print(f"단말 연결 실패 — 표준 XAUUSD 사양으로 계산합니다.\n  ({exc})\n")
+    print(sizing_table(cfg, args.balance, info))
     return 0
 
 
@@ -440,6 +467,14 @@ def main(argv=None) -> int:
                      help="주당 거래 수 (이 엔진은 주 3~5건 정도 나온다)")
     s12.add_argument("--paths", type=int, default=2000, help="시뮬레이션 경로 수")
     s12.set_defaults(func=cmd_risk)
+
+    s13 = sub.add_parser("sizing", help="손절 핍 → 랏 → 리스크/이익 표", parents=[common])
+    s13.add_argument("--paper", action="store_true", help="표준 XAUUSD 사양으로 계산")
+    s13.add_argument("--login", type=int)
+    s13.add_argument("--password")
+    s13.add_argument("--server")
+    s13.add_argument("--terminal-path", dest="terminal_path")
+    s13.set_defaults(func=cmd_sizing)
 
     s9 = sub.add_parser("status", help="서킷브레이커 잠금 상태", parents=[common])
     s9.set_defaults(func=cmd_status)

@@ -47,7 +47,17 @@ def position_size(
     sl: float,
     cfg: CrowConfig,
 ) -> tuple[float, float]:
-    """(랏, 실제 리스크 금액) 반환. SL 거리가 0이면 거래 불가."""
+    """(랏, 실제 리스크 금액) 반환. SL 거리가 0이면 거래 불가.
+
+    소액 계좌에서는 최소 랏(금 0.01) 아래로 내려갈 수 없다. 목표 리스크%가
+    최소 랏보다 작게 나오면 그냥 버리는 게 아니라, 최소 랏의 실제 리스크가
+    `max_risk_pct` 이하인지 보고 판단한다.
+
+      잔고 $100, 리스크 2%, 손절 25핍($2.50)
+        → 계산된 랏 0.008 → 내림하면 0 → 매매 불가
+        → 하지만 0.01랏의 실제 리스크는 $2.50 = 2.5% 이므로
+          상한 3% 안에 들어와 진입한다.
+    """
     dist = abs(entry - sl)
     if dist <= 0 or balance <= 0:
         return 0.0, 0.0
@@ -55,6 +65,12 @@ def position_size(
     raw = risk_amount / (dist * cfg.contract_size)
     cap = max_lots_by_leverage(balance, cfg.max_leverage, cfg.contract_size, entry)
     lots = round_lots(min(raw, cap), cfg.lot_step, cfg.min_lot, cfg.max_lot)
+
+    if lots <= 0 and cfg.max_risk_pct > 0 and cfg.min_lot <= cap:
+        floor_risk = cfg.min_lot * dist * cfg.contract_size
+        if floor_risk <= balance * (cfg.max_risk_pct / 100.0):
+            lots = cfg.min_lot
+
     return lots, lots * dist * cfg.contract_size
 
 

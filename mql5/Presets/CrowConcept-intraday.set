@@ -1,6 +1,6 @@
 ; CrowConcept preset: intraday  (generated from crowcode/config.py)
 ; H4 > H1 > M15 | risk 2.0% | RR 1:3
-; stop 2.5-25 pips ($2.5-$25, 1 pip = $1) | mode filter
+; stop 25-250 pips ($2.5-$25, 1 pip = $0.1) | mode filter
 ; Load in MT5: EA properties -> Load, then set InpDryRun=true for the first weeks.
 
 InpHTF=16388

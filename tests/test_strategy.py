@@ -23,7 +23,7 @@ class TestGates(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.series = synthetic(6000)
-        cls.cfg = preset("scalp")
+        cls.cfg = preset("intraday")
 
     def test_no_signal_outside_session(self):
         st = CrowStrategy(self.cfg)
@@ -69,7 +69,7 @@ class TestSignalIntegrity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.series = synthetic(6000)
-        cls.cfg = preset("scalp")
+        cls.cfg = preset("intraday")
         st = CrowStrategy(cls.cfg)
         view = st.view(cls.series)
         cls.signals = []
@@ -111,7 +111,7 @@ class TestSignalIntegrity(unittest.TestCase):
 class TestNoLookahead(unittest.TestCase):
     def test_truncated_history_gives_same_signal(self):
         series = synthetic(6000)
-        cfg = preset("scalp")
+        cfg = preset("intraday")
 
         i, full_sig = first_signal(series, cfg)
         self.assertIsNotNone(full_sig, "비교할 시그널을 찾지 못함")
@@ -128,7 +128,7 @@ class TestNoLookahead(unittest.TestCase):
 
 class TestPresets(unittest.TestCase):
     def test_all_presets_construct(self):
-        for name in ("swing", "scalp", "highrisk"):
+        for name in ("swing", "intraday", "scalp", "highrisk"):
             st = CrowStrategy(preset(name))
             self.assertEqual(st.cfg.name, name)
 

@@ -29,8 +29,9 @@ from crowcode.config import CrowConfig
 CANONICAL = "XAUUSD"
 
 #: 흔한 표기. 우선순위 순서대로 찾는다.
+#: 엑스네스는 XAUUSD (Standard/Pro/Raw/Zero) 와 XAUUSDm (Cent) 를 쓴다.
 SYMBOL_PATTERNS: tuple[str, ...] = (
-    "XAUUSD", "XAUUSD.m", "XAUUSDm", "XAUUSD.a", "XAUUSD_", "XAUUSD.raw",
+    "XAUUSD", "XAUUSDm", "XAUUSD.m", "XAUUSD.a", "XAUUSD_", "XAUUSD.raw",
     "XAUUSD.pro", "XAUUSD-ECN", "XAUUSDx", "GOLD", "GOLD.m", "Gold", "XAUUSD.i",
 )
 
@@ -99,9 +100,12 @@ def min_viable_balance(cfg: CrowConfig, sl_price: float, info=None) -> float:
     """
     per_unit = money_per_price_unit(info) if info is not None else cfg.contract_size
     min_lot = getattr(info, "volume_min", cfg.min_lot) if info is not None else cfg.min_lot
+    # 실제로 진입을 막는 것은 목표 리스크%가 아니라 그 상한이다.
+    # 상한 안이면 최소 랏으로라도 들어가기 때문이다.
     if cfg.risk_pct <= 0 or sl_price <= 0:
-        return 0.0
-    return min_lot * sl_price * per_unit * 100.0 / cfg.risk_pct
+        return 0.0                         # 리스크 0 = 매매하지 않겠다는 뜻
+    ceiling = cfg.max_risk_pct or cfg.risk_pct
+    return min_lot * sl_price * per_unit * 100.0 / ceiling
 
 
 # ----------------------------------------------------------------------
@@ -142,7 +146,45 @@ class Preflight:
         return "\n".join(head + body + tail)
 
 
-def preflight(cfg: CrowConfig, info, balance: float, spread_price: float | None = None) -> Preflight:
+def _broker_checks(cfg: CrowConfig, info, currency: str | None, balance: float) -> list[Check]:
+    """엑스네스에서 실제로 사고가 나는 지점들."""
+    out: list[Check] = []
+    name = (getattr(info, "name", "") or "").upper()
+
+    # 센트 계좌: 잔고 단위가 센트라 리스크 계산이 100배 어긋난다
+    cur = (currency or "").upper()
+    if cur in ("USC", "USDC") or name.endswith("M"):
+        out.append(Check(
+            "warn", "센트 계좌 의심",
+            f"심볼 {getattr(info, 'name', '?')} / 통화 {currency or '?'} — "
+            "엑스네스 Cent 계좌는 잔고가 센트 단위다. 잔고 10,000 이 실제 $100 이라면 "
+            "리스크%가 그대로 맞지만, 표시 금액은 100배로 보인다는 점을 기억할 것."))
+
+    # 레버리지: 엑스네스는 1:2000 까지 준다
+    lev = getattr(info, "leverage", None)
+    if lev is None:
+        lev = 0
+    if lev and lev > 200:
+        out.append(Check(
+            "warn", "레버리지 과다",
+            f"1:{lev} 는 실수 한 번이 계좌를 지운다. 엑스네스 개인 정보에서 "
+            "1:100 이하로 낮춰 두면 플랫폼이 과대 주문을 대신 막아 준다."))
+
+    # 스프레드 vs 손절: 20핍 손절에서 가장 빡빡한 제약
+    if cfg.min_sl_price > 0 and cfg.max_spread_ratio > 0:
+        allowed = cfg.min_sl_price * cfg.max_spread_ratio
+        lo_pips, _ = cfg.sl_pips
+        out.append(Check(
+            "ok", "필요 스프레드",
+            f"손절 {lo_pips:g}핍(${cfg.min_sl_price:.2f}) 기준 스프레드는 "
+            f"${allowed:.2f} 이하여야 한다. 엑스네스 Standard 금은 보통 "
+            f"$0.20~0.35, Raw/Zero 는 $0.10~0.20 + 수수료다 — "
+            f"{'Standard 로도 가능하나 넓어지는 시간대엔 걸러진다' if allowed >= 0.25 else 'Raw/Zero 계좌가 사실상 필수다'}."))
+    return out
+
+
+def preflight(cfg: CrowConfig, info, balance: float, spread_price: float | None = None,
+              account_currency: str | None = None) -> Preflight:
     """브로커·계좌·프리셋 조합이 실제로 돌아갈 수 있는지 미리 확인한다.
 
     실전에서 "왜 한 번도 진입을 안 하지?" 의 원인은 대부분 여기서 잡힌다.
@@ -212,6 +254,9 @@ def preflight(cfg: CrowConfig, info, balance: float, spread_price: float | None 
             out.checks.append(Check(
                 "ok", "스프레드", f"{pts:.0f}포인트(${spread_price:.2f})"))
 
+    # --- 4b) 엑스네스 특유의 함정
+    out.checks.extend(_broker_checks(cfg, info, account_currency, balance))
+
     # --- 5) 설정 자체의 모순
     warns = cfg.validate()
     if warns:
@@ -229,6 +274,70 @@ def preflight(cfg: CrowConfig, info, balance: float, spread_price: float | None 
             "브로커의 XAUUSD 스왑을 확인하고 목표 R 에 반영할 것."))
 
     return out
+
+
+# ----------------------------------------------------------------------
+# 랏·핍·손익 표 — "0.01랏에 20핍이면 얼마인가" 를 그대로 보여준다
+# ----------------------------------------------------------------------
+def pip_value(lots: float, pip_size: float, info=None) -> float:
+    """`lots` 랏에서 1핍이 몇 달러인가.
+
+    엑스네스 XAUUSD 기준: 0.01랏 · 1핍($0.10) = $0.10
+    """
+    return lots * pip_size * money_per_price_unit(info) if info is not None \
+        else lots * pip_size * REFERENCE.money_per_dollar_per_lot
+
+
+def sizing_table(cfg: CrowConfig, balance: float, info=None,
+                 pip_steps: Sequence[int] = (10, 15, 20, 25, 30, 40, 50)) -> str:
+    """손절 핍 → 랏 → 리스크 금액/비율 → 목표 핍 → 이익 금액."""
+    from crowcode.risk import position_size
+
+    per_unit = money_per_price_unit(info) if info is not None else cfg.contract_size
+    min_lot = getattr(info, "volume_min", cfg.min_lot) if info is not None else cfg.min_lot
+    ref_price = 2000.0                     # 랏 계산에는 가격 수준이 거의 영향 없다
+    lo_pips, hi_pips = cfg.sl_pips
+
+    out = [
+        "=" * 78,
+        f" 랏·손익 표 — 잔고 {balance:,.2f} / 목표 리스크 {cfg.risk_pct:g}% "
+        f"(상한 {cfg.max_risk_pct:g}%) / RR 1:{cfg.target_rr:g}",
+        "=" * 78,
+        f" 1핍 = ${cfg.pip_size:g}   ·   {min_lot:g}랏에서 1핍 = "
+        f"${pip_value(min_lot, cfg.pip_size, info):.2f}   ·   "
+        f"1랏 · $1 움직임 = ${per_unit:,.0f}",
+        f" 설정된 손절 범위: {lo_pips:g}~{hi_pips:g}핍  "
+        f"(목표 {lo_pips * cfg.target_rr:g}~{hi_pips * cfg.target_rr:g}핍)",
+        "-" * 78,
+        f"   {'손절':<8}{'금액':>8}{'랏':>8}{'리스크':>12}{'목표':>9}{'이익':>10}{'':>4}",
+    ]
+    for pips in pip_steps:
+        sl_price = pips * cfg.pip_size
+        lots, risk = position_size(balance, cfg.risk_pct, ref_price,
+                                   ref_price - sl_price, cfg)
+        tp_pips = pips * cfg.target_rr
+        profit = lots * tp_pips * cfg.pip_size * per_unit
+        in_band = (not lo_pips or lo_pips <= pips <= hi_pips)
+        if lots <= 0:
+            mark = "  랏 부족"
+        elif not in_band:
+            mark = "  범위 밖"
+        else:
+            mark = "  ←"
+        out.append(
+            f"   {pips:>4g}핍  ${sl_price:>6.2f}{lots:>8.2f}"
+            f"{('$' + format(risk, '.2f')):>8} ({risk / balance * 100:>4.1f}%)"
+            f"{tp_pips:>7g}핍{('$' + format(profit, '.2f')):>10}{mark}")
+
+    out += [
+        "-" * 78,
+        " '←' 가 설정된 손절 범위 안이다. '범위 밖' 은 랏 계산은 되지만",
+        " 프리셋의 손절 가드에 걸려 실제로는 진입하지 않는다.",
+        f" '랏 부족' 은 최소 랏({min_lot:g}) 의 리스크가 상한 "
+        f"{cfg.max_risk_pct:g}% 를 넘어 진입할 수 없다는 뜻이다.",
+        "=" * 78,
+    ]
+    return "\n".join(out)
 
 
 # ----------------------------------------------------------------------

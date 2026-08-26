@@ -2,7 +2,12 @@
 
 Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0) 에 공개된
 매매 방식을 **하나의 실행 가능한 규칙 엔진**으로 정리한 것이다.
-대상은 **XAUUSD(금) 전용** — 프리셋의 손절 폭, 스프레드 필터, 필요 자본이 전부 금 기준이다.
+대상은 **XAUUSD(금) 전용**, 브로커는 **엑스네스 MT5** 기준이다.
+
+```
+거래당 리스크 2% (상한 3%)   ·   손절 20~25핍 ($2.00~$2.50)   ·   목표 1:3 (60~75핍)
+1핍 = $0.10        0.01랏에서 1핍 = $0.10        $100 계좌 · 0.01랏 · 20핍 = $2.00 리스크
+```
 
 채널 글은 대부분 차트 이미지 + 짧은 코멘트라서, 흩어져 있는 규칙을
 탑다운 파이프라인 하나로 묶고 파라미터화했다.
@@ -42,7 +47,7 @@ Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0
 
 ```bash
 git clone <repo> && cd trading2
-python3 -m unittest discover -s tests -t .     # 244개 테스트
+python3 -m unittest discover -s tests -t .     # 255개 테스트
 python3 examples/quickstart.py                 # 데이터 없이 바로 실행되는 예제
 ```
 
@@ -61,6 +66,20 @@ python3 -m crowcode rules --preset intraday # 파라미터 전체
   intraday  H4>H1>M15  리스크  1.0%  손절 $ 2.50~$25.00  필요 자본      250 ~     2,500
   scalp     H1>M15>M5   리스크  0.5%  손절 $ 1.50~$10.00  필요 자본      300 ~     2,000
   highrisk  M15>M5>M1   리스크  6.0%  손절 $ 0.80~$4.00   필요 자본       13 ~        67
+```
+
+### 랏·손익 표
+
+```bash
+python3 -m crowcode sizing --paper --balance 100
+```
+
+```
+ 1핍 = $0.1   ·   0.01랏에서 1핍 = $0.10   ·   1랏 · $1 움직임 = $100
+   손절            금액       랏         리스크       목표        이익
+     20핍  $  2.00    0.01   $2.00 ( 2.0%)     60핍     $6.00  ←
+     25핍  $  2.50    0.01   $2.50 ( 2.5%)     75핍     $7.50  ←
+     40핍  $  4.00    0.00   $0.00 ( 0.0%)    120핍     $0.00  랏 부족
 ```
 
 ### 리스크 사다리 확인
