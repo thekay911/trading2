@@ -283,7 +283,9 @@ SCALP = CrowConfig(
     # 운용 규칙: 손절 20~25핍 = $2.00~$2.50, 목표 1:3 = 60~75핍 = $6.00~$7.50
     pip_size=0.10, min_sl_price=2.0, max_sl_price=2.5,
     sl_mode="clamp",              # 구조가 더 좁게 잡히면 20핍까지 넓혀서 쓴다
-    max_spread_ratio=0.15,        # $2.00 손절 기준 스프레드 $0.30 까지
+    # 엑스네스 Standard: 금 스프레드 $0.20~0.35 → 20핍($2.00) 손절의 10~18%.
+    # 이보다 넓어지는 시간대(지표·롤오버·아시아장)는 건너뛴다.
+    max_spread_ratio=0.18,
     max_consecutive_losses=2, max_daily_loss_pct=6.0,
 )
 
