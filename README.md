@@ -42,7 +42,7 @@ Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0
 
 ```bash
 git clone <repo> && cd trading2
-python3 -m unittest discover -s tests -t .     # 162개 테스트
+python3 -m unittest discover -s tests -t .     # 244개 테스트
 python3 examples/quickstart.py                 # 데이터 없이 바로 실행되는 예제
 ```
 
@@ -61,6 +61,30 @@ python3 -m crowcode rules --preset intraday # 파라미터 전체
   intraday  H4>H1>M15  리스크  1.0%  손절 $ 2.50~$25.00  필요 자본      250 ~     2,500
   scalp     H1>M15>M5   리스크  0.5%  손절 $ 1.50~$10.00  필요 자본      300 ~     2,000
   highrisk  M15>M5>M1   리스크  6.0%  손절 $ 0.80~$4.00   필요 자본       13 ~        67
+```
+
+### 리스크 사다리 확인
+
+```bash
+python3 -m crowcode risk --preset intraday
+```
+
+거래당 2% / 1:3 에서 손익분기 승률, 승률별 최대낙폭·최장연패,
+서킷이 실제로 걸릴 수 있는지를 계산한다.
+
+```
+ 손실 사다리
+   거래당            -2%
+   연속 2회 손절     -4%   → 그날 매매 종료
+   일일 한도         -6%   → 그날 매매 종료
+   서킷브레이커      -10%  → 잠금 (복기 전까지 재개 불가)
+
+ 손익분기 승률  25%   ← 1:3 에서 본전이 되는 승률
+
+   승률         기대값      연간 R      수익률      최대낙폭     최장연패     서킷     손실마감
+   25%     +0.00R       -1R      -2%     46.0%      14회     0%      51%
+   35%     +0.40R      +63R    +126%     22.0%      10회     0%       0%
+   50%     +1.00R     +156R    +312%     14.0%       6회     0%       0%
 ```
 
 ### 사전 점검 — 계좌·브로커가 이 설정을 감당하는지
@@ -194,6 +218,7 @@ print(res.report())
 | `sessions.py` | 세션 창, 뉴스 블랙아웃, 금요일 마감 |
 | `risk.py` | 사이징, 레버리지 상한, 본절/분할, 일일 한도, 계좌 3분할 |
 | `gold.py` | XAUUSD 전용 — 심볼 이름 해석, 필요 자본, 사전 점검, 지표 목록 |
+| `riskmath.py` | 손익분기 승률, 연패 분포, 낙폭 시뮬레이션 |
 | `strategy.py` | 위 전부를 묶는 탑다운 파이프라인 |
 | `backtest.py` | 이벤트 기반 백테스터 (SL 우선 체결, 스프레드 반영) |
 | `mt5/broker.py` | 브로커 인터페이스 + 심볼 사양(랏 단위, 최소 이격, 틱 가치) |

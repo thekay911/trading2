@@ -20,8 +20,12 @@ def dummy_signal(side="buy", entry=100.0, sl=99.0, tp=103.0):
 
 
 class TestPositionLifecycle(unittest.TestCase):
+    """관리 동작 검증. 프리셋의 정책값이 바뀌어도 흔들리지 않게 명시한다."""
+
+    MGMT = SCALP.with_(breakeven_at_r=2.0, partial_at_r=3.0, partial_fraction=0.5)
+
     def setUp(self):
-        self.bt = Backtester(SCALP, balance=1000.0, spread=0.0)
+        self.bt = Backtester(self.MGMT, balance=1000.0, spread=0.0)
         self.risk = RiskState(balance=1000.0)
 
     def _run(self, pos, candles):

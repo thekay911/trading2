@@ -51,15 +51,15 @@ input double           InpMaxSLPrice       = 25.00;       // reject stops wider 
 input double           InpMaxSpreadRatio   = 0.08;        // max spread / stop distance
 
 input group "=== Risk management ==="
-input double           InpRiskPercent      = 1.0;         // risk per trade (% balance)
-input double           InpMinRR            = 2.0;         // minimum reward:risk
+input double           InpRiskPercent      = 2.0;         // risk per trade (% balance)
+input double           InpMinRR            = 3.0;         // minimum reward:risk
 input double           InpTargetRR         = 3.0;         // fixed target when no liquidity
-input double           InpBreakevenAtR     = 2.0;         // move SL to entry at this R
-input double           InpPartialAtR       = 3.0;         // partial close at this R
+input double           InpBreakevenAtR     = 1.5;         // move SL to entry at this R
+input double           InpPartialAtR       = 2.0;         // partial close at this R (must be < target)
 input double           InpPartialFraction  = 0.5;         // fraction closed
 input int              InpMaxTradesPerDay  = 3;           // hard cap
 input int              InpMaxConsecLosses  = 2;           // stop the day after N losses
-input double           InpMaxDailyLossPct  = 3.0;         // stop the day at this drawdown
+input double           InpMaxDailyLossPct  = 6.0;         // stop the day at this drawdown
 input int              InpBeBufferPoints   = 10;          // breakeven buffer (points)
 
 input group "=== Filters ==="
@@ -174,6 +174,21 @@ int OnInit()
       Print("CrowConcept: InpMinSLPrice must be smaller than InpMaxSLPrice");
       return(INIT_PARAMETERS_INCORRECT);
      }
+   if(InpPartialAtR >= InpTargetRR && InpPartialFraction > 0.0)
+      PrintFormat("CrowConcept WARNING: partial at %.1fR >= target %.1fR - "
+                  "the partial can only fire at the target, so it never really happens.",
+                  InpPartialAtR, InpTargetRR);
+   if(InpBreakevenAtR >= InpPartialAtR)
+      PrintFormat("CrowConcept WARNING: breakeven %.1fR >= partial %.1fR - check the order.",
+                  InpBreakevenAtR, InpPartialAtR);
+   if(InpHardStopPct > 0.0 && InpHardStopPct <= InpMaxDailyLossPct)
+      PrintFormat("CrowConcept WARNING: circuit %.1f%% <= daily cap %.1f%% - "
+                  "the daily cap always fires first, so the circuit is dead.",
+                  InpHardStopPct, InpMaxDailyLossPct);
+   if(InpMaxDailyLossPct < InpRiskPercent * InpMaxConsecLosses)
+      PrintFormat("CrowConcept WARNING: daily cap %.1f%% < risk x consecutive losses %.1f%% - "
+                  "the consecutive-loss rule will never be reached.",
+                  InpMaxDailyLossPct, InpRiskPercent * InpMaxConsecLosses);
    if(InpMaxDailyLossPct < InpRiskPercent)
       PrintFormat("CrowConcept WARNING: daily loss cap %.1f%% is below per-trade risk %.1f%% "
                   "- the first loss would end the day",
@@ -203,6 +218,10 @@ int OnInit()
       PrintFormat("CrowConcept: *** LIVE ORDERS ENABLED *** %s risk=%.2f%% magic=%I64d",
                   g_sym, InpRiskPercent, InpMagic);
 
+   PrintFormat("CrowConcept loss ladder | trade -%.1f%% | %d in a row -%.1f%% | "
+               "day -%.1f%% | circuit -%.1f%%",
+               InpRiskPercent, InpMaxConsecLosses,
+               InpRiskPercent * InpMaxConsecLosses, InpMaxDailyLossPct, InpHardStopPct);
    PrintFormat("CrowConcept ready | %s | HTF=%s MTF=%s LTF=%s | risk=%.2f%% | dry_run=%s",
                g_sym, EnumToString(InpHTF), EnumToString(InpMTF), EnumToString(InpLTF),
                InpRiskPercent, (InpDryRun ? "true" : "false"));

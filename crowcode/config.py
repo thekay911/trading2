@@ -71,7 +71,8 @@ class CrowConfig:
     # ------------------------------------------------------------------
     # 5. 리스크 / 자금관리  ("quản lý vốn là thứ quan trọng bậc nhất")
     # ------------------------------------------------------------------
-    risk_pct: float = 1.0             # [출처] "1틱당 계좌 1% 이하"
+    risk_pct: float = 2.0             # 운용 규칙: 거래당 2%
+    #    [참고] 채널 원문은 "1틱당 계좌 1% 이하"
     min_rr: float = 2.0               # [출처] "최소 1:2"
     target_rr: float = 3.0            # [출처] "1:3 이 기본, 스윙은 1:5~1:10"
     breakeven_at_r: float = 2.0       # [출처] "2R 도달 시 SL 을 본절로"
@@ -158,6 +159,10 @@ class CrowConfig:
                 f"[주의] 서킷브레이커 {self.hard_stop_loss_pct}% ≤ 일일 한도 "
                 f"{self.max_daily_loss_pct}% → 일일 한도가 먼저 걸려 서킷브레이커는 "
                 "사실상 작동하지 않는다")
+        if self.partial_at_r >= self.target_rr and self.partial_fraction > 0:
+            out.append(
+                f"[주의] 분할 청산 {self.partial_at_r}R 이 목표 {self.target_rr}R 이상 "
+                "→ 목표에 닿아야 분할이 되므로 사실상 분할이 없다")
         if self.breakeven_at_r >= self.target_rr:
             out.append(
                 f"[주의] 본절 이동 {self.breakeven_at_r}R 이 목표 {self.target_rr}R 이상 "
@@ -166,6 +171,16 @@ class CrowConfig:
 
 
 # ----------------------------------------------------------------------
+# 리스크 사다리 (운용 규칙: 거래당 2%, 1:3 RR)
+#
+#   거래당        -2%
+#   연속 2회 손절  -4%   → 그날 매매 종료
+#   일일 한도      -6%   → 그날 매매 종료 (연속이 아니어도)
+#   서킷브레이커   -10%  → 잠금. 복기 전까지 재개 불가
+#
+# 각 단계는 앞 단계보다 커야 의미가 있다. 일일 한도가 거래당 리스크보다
+# 낮으면 첫 손절에서 하루가 끝나 연속 손절 규칙이 죽는다 — validate() 가 잡는다.
+#
 # 프리셋 — 전부 XAUUSD 기준으로 조정되어 있다.
 #
 # 손절 폭 가드는 '금 달러' 단위다. 금은 M5 ATR 이 대략 $1.5~4,
@@ -176,46 +191,51 @@ class CrowConfig:
 SWING = CrowConfig(
     name="swing",
     htf="D1", mtf="H4", ltf="H1",
-    risk_pct=1.0, target_rr=5.0, min_rr=3.0,
+    risk_pct=2.0, min_rr=3.0, target_rr=3.0,
+    breakeven_at_r=1.5, partial_at_r=2.0,
     max_trades_per_day=2, limit_expiry_bars=24,   # H1 24봉 = 하루 ("걸어두고 잔다")
     min_sl_price=6.0, max_sl_price=60.0,          # 금 스윙: $6~60 손절
     max_spread_ratio=0.04,
-    max_daily_loss_pct=3.0,
+    max_consecutive_losses=2, max_daily_loss_pct=6.0,
 )
 
 # 금에 가장 무난한 프레임. 런던·뉴욕 세션 안에서 대부분 결판난다.
 INTRADAY = CrowConfig(
     name="intraday",
     htf="H4", mtf="H1", ltf="M15",
-    risk_pct=1.0, target_rr=3.0, min_rr=2.0,
+    risk_pct=2.0, min_rr=3.0, target_rr=3.0,
+    breakeven_at_r=1.5, partial_at_r=2.0,
     max_trades_per_day=3, limit_expiry_bars=32,   # M15 32봉 = 8시간
     sl_buffer_atr=0.3,
     min_sl_price=2.5, max_sl_price=25.0,
     max_spread_ratio=0.08,
-    max_daily_loss_pct=3.0,
+    max_consecutive_losses=2, max_daily_loss_pct=6.0,
 )
 
 SCALP = CrowConfig(
     name="scalp",
     htf="H1", mtf="M15", ltf="M5",
-    risk_pct=0.5, target_rr=3.0, min_rr=2.0,
+    risk_pct=2.0, min_rr=3.0, target_rr=3.0,
+    breakeven_at_r=1.5, partial_at_r=2.0,
     max_trades_per_day=6, limit_expiry_bars=96,   # M5 96봉 = 8시간 (세션 내내 유효)
     sl_buffer_atr=0.25,
     min_sl_price=1.5, max_sl_price=10.0,
     max_spread_ratio=0.12,
-    max_daily_loss_pct=2.0,
+    max_consecutive_losses=2, max_daily_loss_pct=6.0,
 )
 
 # [출처] "M1 은 SL 이 2~3핍이라 스프레드에 죽는다 → 소액 고위험 계좌로만"
 #        "X10 sau 2 ngày" — 2일 만에 10배. 반대로 2일 만에 0이 될 수도 있다.
-# 채널이 말한 6% 리스크는 그대로 두되, 한도는 서킷브레이커(10%)와
-# 모순되지 않게 맞췄다. 6% 리스크면 두 번째 손절에서 서킷이 걸린다.
+# 이 프리셋만 채널 원문의 6% 를 유지한다 (운용 규칙 2% 와 별개인,
+# 없어져도 되는 소액 계좌용 기록). 나머지 한도는 모순 없게 맞췄다.
 HIGH_RISK = CrowConfig(
     name="highrisk",
     htf="M15", mtf="M5", ltf="M1",
-    risk_pct=6.0, target_rr=3.0, min_rr=1.5,
-    max_trades_per_day=20, max_consecutive_losses=2,
-    max_daily_loss_pct=9.0,
+    risk_pct=6.0, min_rr=1.5, target_rr=3.0,
+    breakeven_at_r=1.5, partial_at_r=2.0,
+    # 6% 리스크면 하루 한 번 지면 끝이다. 그게 이 설정의 정직한 모습이다.
+    max_trades_per_day=20, max_consecutive_losses=1,
+    max_daily_loss_pct=6.0,
     limit_expiry_bars=30, sl_buffer_atr=0.2, max_leverage=20,
     min_sl_price=0.8, max_sl_price=4.0,
     max_spread_ratio=0.20,

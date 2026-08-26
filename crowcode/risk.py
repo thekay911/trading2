@@ -109,12 +109,12 @@ class ManagedPosition:
             if self._sl_is_forward(new_sl, cfg):
                 self.sl = new_sl
                 self.moved_to_be = True
-                acts.append(f"{cfg.breakeven_at_r:.0f}R 도달 → SL 본절 이동")
+                acts.append(f"{cfg.breakeven_at_r:g}R 도달 → SL 본절 이동")
 
         if not self.partial_done and r >= cfg.partial_at_r and cfg.partial_fraction > 0:
             self.remaining = max(0.0, self.remaining - cfg.partial_fraction)
             self.partial_done = True
-            acts.append(f"{cfg.partial_at_r:.0f}R 도달 → {cfg.partial_fraction:.0%} 분할 청산")
+            acts.append(f"{cfg.partial_at_r:g}R 도달 → {cfg.partial_fraction:.0%} 분할 청산")
         return acts
 
     def _sl_is_forward(self, new_sl: float, cfg: CrowConfig) -> bool:

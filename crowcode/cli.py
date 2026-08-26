@@ -224,6 +224,14 @@ def cmd_preflight(args) -> int:
         broker.shutdown()
 
 
+def cmd_risk(args) -> int:
+    from crowcode.riskmath import report
+
+    cfg = _overrides(args, preset(args.preset))
+    print(report(cfg, weeks=args.weeks, trades_per_week=args.per_week, paths=args.paths))
+    return 0
+
+
 def cmd_status(args) -> int:
     from crowcode.mt5.lockout import LockoutStore
 
@@ -399,6 +407,13 @@ def main(argv=None) -> int:
 
     s8 = sub.add_parser("gold", help="XAUUSD 기준 수치와 필요 자본", parents=[common])
     s8.set_defaults(func=cmd_gold)
+
+    s12 = sub.add_parser("risk", help="리스크 사다리와 승률별 결과 계산", parents=[common])
+    s12.add_argument("--weeks", type=int, default=52, help="시뮬레이션 주 수")
+    s12.add_argument("--per-week", type=float, default=3.0, dest="per_week",
+                     help="주당 거래 수 (이 엔진은 주 3~5건 정도 나온다)")
+    s12.add_argument("--paths", type=int, default=2000, help="시뮬레이션 경로 수")
+    s12.set_defaults(func=cmd_risk)
 
     s9 = sub.add_parser("status", help="서킷브레이커 잠금 상태", parents=[common])
     s9.set_defaults(func=cmd_status)

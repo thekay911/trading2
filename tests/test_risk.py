@@ -52,28 +52,32 @@ class TestRR(unittest.TestCase):
 
 
 class TestManagedPosition(unittest.TestCase):
+    """동작 검증이므로 프리셋 정책값에 기대지 않고 설정을 명시한다."""
+
+    MGMT = SCALP.with_(breakeven_at_r=2.0, partial_at_r=3.0, partial_fraction=0.5)
+
     def _pos(self):
         return ManagedPosition("buy", 100.0, 99.0, 103.0, 0.1, 1.0, T0)
 
     def test_breakeven_moves_at_2r(self):
         p = self._pos()
-        self.assertEqual(p.update(101.5, SCALP), [])       # 1.5R — 아직
-        acts = p.update(102.0, SCALP)                      # 2R
+        self.assertEqual(p.update(101.5, self.MGMT), [])       # 1.5R — 아직
+        acts = p.update(102.0, self.MGMT)                 # 2R
         self.assertTrue(acts)
         self.assertEqual(p.sl, 100.0)
         self.assertTrue(p.moved_to_be)
 
     def test_sl_never_moves_backward(self):
         p = self._pos()
-        p.update(102.0, SCALP)
+        p.update(102.0, self.MGMT)
         p.sl = 101.0                                       # 이미 앞으로 옮긴 상태
         p.moved_to_be = False
-        p.update(102.5, SCALP)
+        p.update(102.5, self.MGMT)
         self.assertEqual(p.sl, 101.0)                      # 100.0 으로 되돌리지 않는다
 
     def test_partial_at_3r(self):
         p = self._pos()
-        p.update(103.0, SCALP)
+        p.update(103.0, self.MGMT)
         self.assertTrue(p.partial_done)
         self.assertAlmostEqual(p.remaining, 0.5)
 
