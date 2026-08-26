@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crowcode"
+version = "1.0.0"
+description = "Crow Concept 트레이딩 방식을 규칙 엔진으로 정리한 패키지"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+crowcode = "crowcode.cli:main"
+
+[tool.setuptools]
+packages = ["crowcode"]
