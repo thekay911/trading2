@@ -28,9 +28,31 @@ from crowcode.strategy import CrowStrategy
 from crowcode.backtest import Backtester
 
 
+def _apply_pips(args, cfg):
+    """--pip-size / --sl-pips 로 손절 범위를 핍 단위로 지정한다."""
+    size = getattr(args, "pip_size", None)
+    band = getattr(args, "sl_pips", None)
+    if size is None and not band:
+        return cfg
+    if size is not None:
+        cfg = cfg.with_(pip_size=size)
+    if band:
+        try:
+            lo, hi = (float(x) for x in str(band).replace("-", ":").split(":"))
+        except ValueError:
+            raise SystemExit(f"--sl-pips 형식이 잘못됨: {band} (예: 20:25)")
+        cfg = cfg.with_sl_pips(lo, hi)
+    print(f"손절 범위: {cfg.sl_label()}   목표 1:{cfg.target_rr:g} → "
+          f"${cfg.min_sl_price * cfg.target_rr:g}~${cfg.max_sl_price * cfg.target_rr:g}")
+    for w in cfg.validate():
+        print("  " + w)
+    return cfg
+
+
 def _overrides(args, cfg):
     """--set key=value 로 설정을 덮어쓴다 (타입은 원본 필드에서 추론)."""
     pairs = getattr(args, "set", None) or []
+    cfg = _apply_pips(args, cfg)
     if not pairs:
         return cfg
     changes = {}
@@ -119,7 +141,7 @@ def _write_html(path: str, content: str) -> None:
 
 
 def cmd_rules(args) -> int:
-    cfg = preset(args.preset)
+    cfg = _overrides(args, preset(args.preset))
     print(f"[{cfg.name}] 프리셋 규칙")
     for k, v in sorted(vars(cfg).items()):
         print(f"  {k:<28} {v}")
@@ -147,7 +169,7 @@ _DEMO_DATA = {
 def cmd_live(args) -> int:
     from crowcode.mt5 import Journal, LiveConfig, LiveRunner, PaperBroker
 
-    cfg = preset(args.preset)
+    cfg = _overrides(args, preset(args.preset))
     live = LiveConfig(
         symbol=args.symbol, preset_name=args.preset, base_timeframe=args.timeframe,
         bars=args.bars, magic=args.magic, deviation=args.deviation,
@@ -203,7 +225,7 @@ def _resolve(broker, requested: str) -> str:
 
 
 def cmd_preflight(args) -> int:
-    cfg = preset(args.preset)
+    cfg = _overrides(args, preset(args.preset))
     if args.paper:
         from crowcode.mt5.paper import XAUUSD
         print(preflight(cfg, XAUUSD, args.balance, args.spread).report())
@@ -338,6 +360,10 @@ def main(argv=None) -> int:
     common.add_argument("--bars", type=int, default=6000, help="CSV 미지정 시 합성 봉 수")
     common.add_argument("--base-minutes", type=int, default=1, dest="base_minutes",
                         help="합성 데이터의 기준 봉 길이(분)")
+    common.add_argument("--sl-pips", dest="sl_pips", metavar="LO:HI",
+                        help="손절 범위를 핍으로 지정. 예: --sl-pips 20:25")
+    common.add_argument("--pip-size", type=float, dest="pip_size",
+                        help="1핍이 몇 달러인가. 금은 브로커마다 1.0 / 0.1 / 0.01")
     common.add_argument("--set", action="append", metavar="KEY=VALUE",
                         help="설정 덮어쓰기. 예: --set sl_buffer_atr=0.5 --set target_rr=2.5")
     common.add_argument("--lockout", default="state/lockout.json",

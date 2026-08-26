@@ -49,6 +49,9 @@ input group "=== XAUUSD stop guards (price = gold dollars) ==="
 input double           InpMinSLPrice       = 2.50;        // reject stops tighter than this
 input double           InpMaxSLPrice       = 25.00;       // reject stops wider than this
 input double           InpMaxSpreadRatio   = 0.08;        // max spread / stop distance
+input bool             InpClampStopToMin   = false;       // widen a tight stop to InpMinSLPrice
+                                                          // (never narrows - a stop inside the
+                                                          //  structure is just a place to get hit)
 
 input group "=== Risk management ==="
 input double           InpRiskPercent      = 2.0;         // risk per trade (% balance)
@@ -1024,7 +1027,23 @@ void TryNewSetup()
 
    //--- gold stop guards: an M15 setup with a $40 stop means something went wrong
    if(InpMinSLPrice > 0.0 && risk < InpMinSLPrice)
-     { Reject("sl_too_tight", StringFormat("stop $%.2f below the $%.2f floor", risk, InpMinSLPrice)); return; }
+     {
+      if(InpClampStopToMin)
+        {
+         sl = NormalizeDouble((dir == DIR_BULL) ? entry - InpMinSLPrice
+                                                : entry + InpMinSLPrice, g_digits);
+         risk = MathAbs(entry - sl);
+         tp = NormalizeDouble((dir == DIR_BULL) ? entry + risk * InpTargetRR
+                                                : entry - risk * InpTargetRR, g_digits);
+         rr = InpTargetRR;
+        }
+      else
+        {
+         Reject("sl_too_tight", StringFormat("stop $%.2f below the $%.2f floor",
+                                             risk, InpMinSLPrice));
+         return;
+        }
+     }
    if(InpMaxSLPrice > 0.0 && risk > InpMaxSLPrice)
      { Reject("sl_too_wide", StringFormat("stop $%.2f above the $%.2f cap", risk, InpMaxSLPrice)); return; }
 

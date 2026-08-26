@@ -227,3 +227,83 @@ class TestSafeDefaults(unittest.TestCase):
     def test_python_runner_defaults_to_dry_run(self):
         from crowcode.mt5.runner import LiveConfig
         self.assertTrue(LiveConfig().dry_run)
+
+
+class TestPipHandling(unittest.TestCase):
+    """금에서 '핍' 은 브로커마다 10배 차이 난다. 그 혼동이 계산까지 번지면 안 된다."""
+
+    def test_pip_conversion_round_trips(self):
+        cfg = preset("intraday").with_(pip_size=1.0)
+        self.assertAlmostEqual(cfg.price_to_pips(cfg.pips_to_price(20)), 20.0)
+
+    def test_same_pips_mean_different_prices(self):
+        base = preset("intraday")
+        big = base.with_sl_pips(20, 25, 1.0)
+        small = base.with_sl_pips(20, 25, 0.10)
+        self.assertAlmostEqual(big.min_sl_price, 20.0)
+        self.assertAlmostEqual(small.min_sl_price, 2.0)
+        self.assertEqual(big.sl_pips, small.sl_pips)     # 핍으로는 같다
+
+    def test_label_shows_both_units(self):
+        label = preset("intraday").with_sl_pips(20, 25, 1.0).sl_label()
+        self.assertIn("20~25핍", label)
+        self.assertIn("$20~$25", label)
+
+    def test_narrow_band_is_flagged(self):
+        cfg = preset("intraday").with_sl_pips(20, 25, 1.0)
+        self.assertTrue(any("너무 좁다" in w for w in cfg.validate()))
+
+    def test_wide_band_is_flagged(self):
+        cfg = preset("intraday").with_sl_pips(2, 40, 1.0)
+        self.assertTrue(any("너무 넓다" in w for w in cfg.validate()))
+
+
+class TestStopClamping(unittest.TestCase):
+    """clamp 는 넓히기만 한다. 좁히면 구조 안쪽에 손절을 두는 셈이 된다."""
+
+    def _signals(self, cfg, bars=9000, minutes=5, step=3):
+        from crowcode.data import synthetic
+        from crowcode.strategy import CrowStrategy
+
+        s = synthetic(bars, minutes=minutes)
+        st = CrowStrategy(cfg, CANONICAL)
+        view = st.view(s)
+        out = []
+        for i in range(800, len(s), step):
+            sig = st.evaluate(view, 50000.0, None, now_ts=s[i].ts)
+            if sig:
+                out.append(sig)
+        return out, st
+
+    def test_clamp_widens_a_tight_structural_stop(self):
+        cfg = preset("intraday").with_sl_pips(20, 25, 1.0).with_(sl_mode="clamp")
+        sigs, _ = self._signals(cfg)
+        self.assertTrue(sigs, "clamp 인데 시그널이 하나도 없다")
+        for s in sigs:
+            self.assertGreaterEqual(s.risk_per_unit, cfg.min_sl_price - 1e-6)
+
+    def test_clamp_never_narrows_below_structure(self):
+        """구조가 상한보다 넓은 손절을 요구하면 좁히지 말고 버려야 한다."""
+        cfg = preset("intraday").with_sl_pips(0.2, 0.5, 1.0).with_(sl_mode="clamp")
+        sigs, st = self._signals(cfg)
+        self.assertEqual(sigs, [])
+        self.assertIn("sl_too_wide", st.rejection_summary())
+
+    def test_filter_mode_rejects_instead_of_widening(self):
+        cfg = preset("intraday").with_sl_pips(20, 25, 1.0)   # 기본 filter
+        sigs, st = self._signals(cfg)
+        self.assertEqual(sigs, [])
+        self.assertIn("sl_too_tight", st.rejection_summary())
+
+    def test_target_follows_the_actual_stop(self):
+        """손절을 넓혔으면 목표도 그에 맞춰 1:3 이어야 한다."""
+        cfg = preset("intraday").with_sl_pips(20, 25, 1.0).with_(sl_mode="clamp")
+        sigs, _ = self._signals(cfg)
+        self.assertTrue(sigs)
+        for s in sigs:
+            self.assertGreaterEqual(s.rr + 1e-9, cfg.min_rr)
+
+    def test_clamp_is_recorded_in_the_reasons(self):
+        cfg = preset("intraday").with_sl_pips(20, 25, 1.0).with_(sl_mode="clamp")
+        sigs, _ = self._signals(cfg)
+        self.assertTrue(any("확대" in r for s in sigs for r in s.reasons))

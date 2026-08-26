@@ -115,9 +115,23 @@ class CrowConfig:
     max_lot: float = 50.0
 
     # ------------------------------------------------------------------
-    # 9. 손절 폭 가드 (가격 단위 = 금 달러)
-    #    말도 안 되는 손절을 걸러낸다. 0 이면 제한 없음.
+    # 9. 손절 폭 가드
+    #
+    #    금에서 "핍" 은 브로커·트레이더마다 10배까지 차이 난다.
+    #      pip_size = 1.00  →  1핍 = $1     (채널이 "SL 2~3핍" 이라 쓴 기준)
+    #      pip_size = 0.10  →  1핍 = $0.10  (많은 브로커의 표기)
+    #      pip_size = 0.01  →  1핍 = MT5 포인트 1
+    #    내부 계산은 전부 **가격(달러)** 으로 하고, pip_size 는 표시와
+    #    입력 변환에만 쓴다. 그래야 이 혼동이 계산까지 번지지 않는다.
     # ------------------------------------------------------------------
+    pip_size: float = 1.0             # 1핍이 몇 달러인가
+
+    #: 손절 범위를 어떻게 쓸 것인가
+    #:   "filter" — 구조가 만든 손절이 범위 밖이면 그 셋업을 버린다
+    #:   "clamp"  — 범위보다 좁으면 넓혀서 쓴다. 범위보다 넓으면 버린다
+    #:              (좁히는 쪽으로는 절대 건드리지 않는다. 구조 안쪽으로
+    #:               손절을 밀어 넣으면 그냥 맞으러 가는 자리가 된다)
+    sl_mode: str = "filter"
     min_sl_price: float = 0.0         # 이보다 좁으면 스프레드·노이즈에 먹힌다
     max_sl_price: float = 0.0         # 이보다 넓으면 그 프리셋의 성격이 아니다
     max_spread_ratio: float = 0.0     # 스프레드 / 손절폭 상한
@@ -127,6 +141,29 @@ class CrowConfig:
 
     def with_(self, **kw) -> "CrowConfig":
         return replace(self, **kw)
+
+    # --- 핍 <-> 가격 ---------------------------------------------------
+    def pips_to_price(self, pips: float) -> float:
+        return pips * self.pip_size
+
+    def price_to_pips(self, price: float) -> float:
+        return price / self.pip_size if self.pip_size else 0.0
+
+    def with_sl_pips(self, lo: float, hi: float, pip_size: float | None = None) -> "CrowConfig":
+        """손절 범위를 핍으로 지정한다. 내부에는 가격으로 저장된다."""
+        size = self.pip_size if pip_size is None else pip_size
+        return replace(self, pip_size=size,
+                       min_sl_price=lo * size, max_sl_price=hi * size)
+
+    @property
+    def sl_pips(self) -> tuple[float, float]:
+        return (self.price_to_pips(self.min_sl_price),
+                self.price_to_pips(self.max_sl_price))
+
+    def sl_label(self) -> str:
+        lo, hi = self.sl_pips
+        return (f"{lo:g}~{hi:g}핍 (${self.min_sl_price:g}~${self.max_sl_price:g}, "
+                f"1핍=${self.pip_size:g})")
 
     # ------------------------------------------------------------------
     def validate(self) -> list[str]:
@@ -150,6 +187,18 @@ class CrowConfig:
             out.append(f"[모순] min_rr {self.min_rr} > target_rr {self.target_rr}")
         if self.max_sl_price and self.min_sl_price and self.min_sl_price >= self.max_sl_price:
             out.append("[모순] min_sl_price >= max_sl_price → 모든 셋업이 기각된다")
+        if self.min_sl_price and self.max_sl_price:
+            lo, hi = self.sl_pips
+            ratio = hi / max(lo, 1e-9)
+            if ratio > 6.0:
+                out.append(
+                    f"[주의] 손절 허용폭이 너무 넓다 ({lo:g}~{hi:g}핍). "
+                    "프리셋의 성격이 흐려져 걸러내는 기능을 못 한다")
+            elif ratio < 1.5:
+                out.append(
+                    f"[주의] 손절 허용폭이 너무 좁다 ({lo:g}~{hi:g}핍, {ratio:.2f}배). "
+                    "구조상 손절은 이 창에 잘 들어오지 않아 대부분의 셋업이 "
+                    "sl_too_tight / sl_too_wide 로 기각된다")
         if self.risk_pct > 3.0:
             out.append(
                 f"[경고] 거래당 리스크 {self.risk_pct}% 는 파산 지향 설정이다. "

@@ -1,5 +1,6 @@
 ; CrowConcept preset: swing  (generated from crowcode/config.py)
-; D1 > H4 > H1 | risk 2.0% | stop $6.0-$60.0
+; D1 > H4 > H1 | risk 2.0% | RR 1:3
+; stop 6-60 pips ($6-$60, 1 pip = $1) | mode filter
 ; Load in MT5: EA properties -> Load, then set InpDryRun=true for the first weeks.
 
 InpHTF=16408
@@ -19,6 +20,7 @@ InpMaxEntryDistATR=3.0
 InpLimitExpiryBars=24
 InpMinSLPrice=6.0
 InpMaxSLPrice=60.0
+InpClampStopToMin=false
 InpMaxSpreadRatio=0.04
 InpRiskPercent=2.0
 InpMinRR=3.0

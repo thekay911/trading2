@@ -26,10 +26,13 @@ TF_ENUM = {
 
 
 def build(cfg: CrowConfig) -> str:
+    lo, hi = cfg.sl_pips
     lines = [
         f"; CrowConcept preset: {cfg.name}  (generated from crowcode/config.py)",
-        f"; {cfg.htf} > {cfg.mtf} > {cfg.ltf} | risk {cfg.risk_pct}% | "
-        f"stop ${cfg.min_sl_price}-${cfg.max_sl_price}",
+        f"; {cfg.htf} > {cfg.mtf} > {cfg.ltf} | risk {cfg.risk_pct}% | RR 1:{cfg.target_rr:g}",
+        # .set 은 MT5 가 읽는 파일이라 주석도 ASCII 로 유지한다 (인코딩 사고 방지)
+        f"; stop {lo:g}-{hi:g} pips (${cfg.min_sl_price:g}-${cfg.max_sl_price:g}, "
+        f"1 pip = ${cfg.pip_size:g}) | mode {cfg.sl_mode}",
         "; Load in MT5: EA properties -> Load, then set InpDryRun=true for the first weeks.",
         "",
         f"InpHTF={TF_ENUM[cfg.htf]}",
@@ -47,8 +50,9 @@ def build(cfg: CrowConfig) -> str:
         f"InpSlBufferATR={cfg.sl_buffer_atr}",
         f"InpMaxEntryDistATR={cfg.max_entry_distance_atr}",
         f"InpLimitExpiryBars={cfg.limit_expiry_bars}",
-        f"InpMinSLPrice={cfg.min_sl_price}",
-        f"InpMaxSLPrice={cfg.max_sl_price}",
+        f"InpMinSLPrice={round(cfg.min_sl_price, 4)}",
+        f"InpMaxSLPrice={round(cfg.max_sl_price, 4)}",
+        f"InpClampStopToMin={'true' if cfg.sl_mode == 'clamp' else 'false'}",
         f"InpMaxSpreadRatio={cfg.max_spread_ratio}",
         f"InpRiskPercent={cfg.risk_pct}",
         f"InpMinRR={cfg.min_rr}",
