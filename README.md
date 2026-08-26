@@ -1,1 +1,151 @@
-# trading2
+# trading2 — Crow Concept 트레이드 코드
+
+Telegram 채널 [`t.me/crowconcept`](https://t.me/crowconcept) (Crow Concept 3.0) 에 공개된
+매매 방식을 **하나의 실행 가능한 규칙 엔진**으로 정리한 것이다.
+
+채널 글은 대부분 차트 이미지 + 짧은 코멘트라서, 흩어져 있는 규칙을
+탑다운 파이프라인 하나로 묶고 파라미터화했다.
+
+- 규칙 원문 ↔ 코드 대응표: **[docs/RULEBOOK.md](docs/RULEBOOK.md)**
+- 외부 의존성 없음 (Python 3.10+ 표준 라이브러리만)
+
+---
+
+## 한눈에 보는 매매 로직
+
+```
+0. 게이트     세션(유럽·미국) / 뉴스 블랙아웃 / 금요일 마감 / 일일 리스크 한도
+      ↓
+1. HTF 방향   시장구조(BOS·CHOCH) + Wyckoff 국면  →  "Buy only" 또는 "Sell only"
+      ↓                                              (둘이 싸우면 관망)
+2. MTF 구역   방향에 맞는 오더블록 / FVG 중 아직 무효화되지 않은 것
+      ↓
+3. LTF 트리거 반대편 유동성 스윕  →  그 다음 CHOCH  (순서가 틀리면 기각)
+      ↓
+4. 주문       POI 근접 경계에 지정가 (이미 존 안이면 시장가)
+              SL = 스윕 극점 바깥 + ATR 버퍼
+              TP = 반대편 유동성, 없으면 고정 R (기본 1:3)
+      ↓
+5. 관리       2R → 본절 이동 / 3R → 절반 청산 / SL 은 뒤로 절대 안 감
+              손절 2연속 → 그날 매매 종료
+```
+
+각 단계에서 걸러진 이유는 전부 기록되어 `rejection_summary()` 로 확인할 수 있다.
+"왜 시그널이 안 나왔는가" 를 추적할 수 있게 만든 것이 이 구조의 핵심이다.
+
+---
+
+## 설치 / 실행
+
+```bash
+git clone <repo> && cd trading2
+python3 -m unittest discover -s tests -t .     # 89개 테스트
+python3 examples/quickstart.py                 # 데이터 없이 바로 실행되는 예제
+```
+
+`data/sample_xauusd_m1.csv` 는 **합성 데이터**다 (CSV 경로 확인용, 실제 시세 아님).
+
+### 프리셋 규칙 확인
+
+```bash
+python3 -m crowcode rules --preset scalp
+```
+
+### 계좌 3분할 (채널의 "스윙/스캘핑/고위험 계좌 분리")
+
+```bash
+python3 -m crowcode split --capital 5000
+#   swing       3,000.00
+#   scalp       1,500.00
+#   high_risk     500.00
+```
+
+### 시그널 산출
+
+```bash
+# 자기 데이터로 (CSV: time,open,high,low,close[,volume])
+python3 -m crowcode signal --csv data/xauusd_m1.csv --preset scalp --balance 5000
+
+# 데이터가 없으면 합성 데이터로 동작 확인
+python3 -m crowcode signal --preset scalp --balance 5000 --bars 12000
+```
+
+출력 예시:
+
+```
+▲ BUY  XAUUSD [H1>M15>M5] LIMIT
+  진입 1954.780 / SL 1948.475 / TP 1973.692  (RR 1:3.0)
+  랏 0.01  리스크 6.30  점수 4.50
+  본절 이동가 1967.388 (2R)
+  · 세션: NewYork
+  · HTF(H1) 구조=bullish, Wyckoff=undefined/Phase B
+  · 유동성 스윕: 1949.406 (below)
+  · LTF(M5) CHOCH 1951.212 돌파 → 구조 전환
+  · 진입 POI: fvg 1953.295~1954.780 (지정가)
+```
+
+### 백테스트
+
+```bash
+python3 -m crowcode backtest --csv data/xauusd_m1.csv --preset scalp \
+        --balance 5000 --spread 0.20 --trades
+python3 -m crowcode demo        # 세 프리셋 전부 합성 데이터로 실행
+```
+
+---
+
+## 파이썬에서 쓰기
+
+```python
+from crowcode import CrowStrategy, Backtester
+from crowcode.config import preset
+from crowcode.data import load_csv
+from crowcode.risk import RiskState
+from crowcode.sessions import NewsEvent
+
+series = load_csv("data/xauusd_m1.csv", "XAUUSD", "M1")
+cfg = preset("scalp").with_(risk_pct=0.75, target_rr=4.0)
+
+# 1) 최신 봉 기준 시그널
+strat = CrowStrategy(cfg, "XAUUSD", news=[NewsEvent(nfp_time, "NFP")])
+sig = strat.evaluate(series, balance=5000, risk=RiskState(balance=5000))
+print(sig.pretty() if sig else strat.rejection_summary())
+
+# 2) 같은 규칙 그대로 백테스트
+res = Backtester(cfg, balance=5000, spread=0.20).run(series)
+print(res.report())
+```
+
+---
+
+## 모듈 구성
+
+| 파일 | 역할 |
+|---|---|
+| `config.py` | 모든 규칙 파라미터 + 프리셋 3종 (swing / scalp / highrisk) |
+| `data.py` | 캔들·시계열·리샘플·ATR, 다중 타임프레임 뷰(`MTFView`) |
+| `structure.py` | 스윙 포인트, BOS, CHOCH (전부 인과적 계산) |
+| `liquidity.py` | 유동성 풀, 스윕, 오더블록, FVG, POI 선정 |
+| `wyckoff.py` | 레인지 탐지, Spring/Upthrust, Phase A~E |
+| `waves.py` | 지그재그 레그, 엘리엇 3규칙 검증, ABC 조정 완료 판정 |
+| `sessions.py` | 세션 창, 뉴스 블랙아웃, 금요일 마감 |
+| `risk.py` | 사이징, 레버리지 상한, 본절/분할, 일일 한도, 계좌 3분할 |
+| `strategy.py` | 위 전부를 묶는 탑다운 파이프라인 |
+| `backtest.py` | 이벤트 기반 백테스터 (SL 우선 체결, 스프레드 반영) |
+
+---
+
+## 설계상 지킨 것
+
+- **룩어헤드 없음** — 스윙은 확정 지연(`confirmed_at`)을 두고, 상위 타임프레임은
+  마감된 봉만 쓴다. 시계열을 잘라서 평가해도 같은 시그널이 나오는지 테스트로 검증한다
+  (`tests/test_strategy.py::TestNoLookahead`).
+- **낙관 편향 없음** — 한 봉 안에서 SL·TP 가 모두 닿으면 항상 SL 체결로 처리한다.
+- **기각 사유 보존** — 어떤 필터가 몇 번 걸렀는지 전부 집계된다.
+
+## 주의
+
+합성 데이터는 무작위 보행이라 우위가 없다. `demo` 의 숫자는 규칙 작동 확인용이지
+성과 근거가 아니다. 채널의 "월 30-50%", "승률 76%" 같은 주장은 검증할 수 없어
+코드에 반영하지 않았다 — 자세한 제외 목록은 [docs/RULEBOOK.md](docs/RULEBOOK.md) 4장 참고.
+실거래 전에는 본인 브로커의 실제 스프레드·스왑으로 반드시 재검증할 것.
