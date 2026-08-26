@@ -25,6 +25,7 @@ def flat_series(prices, start=T0):
 
 
 def quiet_runner(broker, **kw):
+    kw.setdefault("lockout_path", "")          # 테스트끼리 잠금이 전파되지 않게
     live = LiveConfig(state_path="", dry_run=False, **kw)
     return LiveRunner(broker, live, preset("scalp"), Journal(echo=False))
 
@@ -151,7 +152,7 @@ class TestRunnerOrdering(unittest.TestCase):
 
     def test_dry_run_sends_nothing(self):
         b = PaperBroker(flat_series([1950.0] * 30), balance=5000.0)
-        live = LiveConfig(state_path="", dry_run=True)
+        live = LiveConfig(state_path="", lockout_path="", dry_run=True)
         r = LiveRunner(b, live, preset("scalp"), Journal(echo=False))
         r.cfg = config_for_symbol(r.base_cfg, b.info, b.account())
         r._place(self._signal(otype="market"), b.info, b.account(), b.tick("XAUUSD"))
@@ -322,7 +323,7 @@ class TestState(unittest.TestCase):
     def test_state_survives_restart(self):
         path = os.path.join(tempfile.mkdtemp(), "state.json")
         b = PaperBroker(flat_series([1950.0] * 30), balance=5000.0)
-        live = LiveConfig(state_path=path, dry_run=False)
+        live = LiveConfig(state_path=path, lockout_path="", dry_run=False)
         r1 = LiveRunner(b, live, preset("scalp"), Journal(echo=False))
         r1.managed[42] = _Managed(42, 1950.0, 1945.0, 1975.0, 0.10, moved_to_be=True)
         r1._save_state()
@@ -337,7 +338,8 @@ class TestState(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("{ not json")
         b = PaperBroker(flat_series([1950.0] * 30), balance=5000.0)
-        r = LiveRunner(b, LiveConfig(state_path=path), preset("scalp"), Journal(echo=False))
+        r = LiveRunner(b, LiveConfig(state_path=path, lockout_path=""), preset("scalp"),
+                       Journal(echo=False))
         self.assertEqual(r.managed, {})
 
 

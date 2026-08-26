@@ -75,6 +75,12 @@ input int              InpNewsBeforeMin    = 15;          // blackout before new
 input int              InpNewsAfterMin     = 30;          // blackout after news
 input int              InpMaxSpreadPoints  = 40;          // skip when spread is wider
 
+input group "=== Circuit breaker (stop, review, then resume) ==="
+input double           InpHardStopPct      = 10.0;        // daily loss that locks trading
+input bool             InpHaltRequiresReview = true;      // lock stays until you release it
+input bool             InpUnlock           = false;       // set true once to release, then false
+input bool             InpWriteJournal     = true;        // append trades to a JSONL file
+
 input group "=== Execution ==="
 input long             InpMagic            = 700911;      // magic number
 input int              InpDeviation        = 20;          // slippage (points)
@@ -92,6 +98,10 @@ double         g_point;
 int            g_digits;
 datetime       g_newsTimes[];
 string         g_lastReject   = "";
+
+#define LOCK_DAY_VAR  "CC_LOCK_DAY"
+#define LOCK_PCT_VAR  "CC_LOCK_PCT"
+#define JOURNAL_FILE  "crowcode_journal.jsonl"
 
 #define DIR_NONE   0
 #define DIR_BULL   1
@@ -170,6 +180,21 @@ int OnInit()
                   InpMaxDailyLossPct, InpRiskPercent);
 
    GoldSanityCheck();
+
+   if(InpUnlock)
+     {
+      if(ReleaseLock())
+         Print("CrowConcept: lock released. Set InpUnlock back to false.");
+      else
+         Print("CrowConcept: no active lock to release.");
+     }
+   else if(IsLocked())
+     {
+      PrintFormat("CrowConcept: LOCKED since %.0f (daily loss %.2f%%). "
+                  "Review the trades, fix what needs fixing, then re-attach with "
+                  "InpUnlock=true. New entries are blocked; open positions are still managed.",
+                  GlobalVariableGet(LOCK_DAY_VAR), GlobalVariableGet(LOCK_PCT_VAR));
+     }
 
    if(InpDryRun)
       Print("CrowConcept: DRY RUN - signals are logged, no orders are sent. "
@@ -860,6 +885,18 @@ void TryNewSetup()
    if(FridayBlocked(gmt))         { Reject("friday", "late friday - no new entries"); return; }
    if(InNewsBlackout(gmt))        { Reject("news", "high impact news window"); return; }
 
+   if(IsLocked())
+     {
+      Reject("locked", "circuit breaker - review, then re-attach with InpUnlock=true");
+      return;
+     }
+
+   int trades_, losses_;
+   double pnlToday;
+   TodayStats(trades_, losses_, pnlToday);
+   if(CircuitBreakerHit(pnlToday))
+     { Reject("locked", "circuit breaker tripped"); return; }
+
    string why;
    if(!RiskGateOpen(why))         { Reject("risk_gate", why); return; }
 
@@ -1038,10 +1075,151 @@ void TryNewSetup()
      }
 
    if(ok)
+     {
       RememberRisk(trade.ResultOrder(), entry, risk);
+      JournalOrder(trade.ResultOrder(), dir, market, entry, sl, tp, lots, z.kind, rr);
+     }
    else
       PrintFormat("CrowConcept: order failed retcode=%d %s",
                   trade.ResultRetcode(), trade.ResultRetcodeDescription());
+  }
+
+//====================================================================
+// Circuit breaker
+//
+// The daily risk gate already stops trading for the day, but it resets
+// at midnight. That lets a bad day repeat itself unchanged. This lock
+// does not reset: it stays until a human looks at what happened and
+// releases it deliberately (InpUnlock=true on re-attach, or delete
+// CC_LOCK_DAY in the Global Variables window, F3).
+//====================================================================
+double TodayKey()
+  {
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   return((double)(dt.year * 10000 + dt.mon * 100 + dt.day));
+  }
+
+bool IsLocked()
+  {
+   return(GlobalVariableCheck(LOCK_DAY_VAR));
+  }
+
+bool ReleaseLock()
+  {
+   if(!IsLocked())
+      return(false);
+   GlobalVariableDel(LOCK_DAY_VAR);
+   GlobalVariableDel(LOCK_PCT_VAR);
+   JournalWrite(StringFormat("{\"kind\":\"lock_released\",\"ts\":\"%s\"}",
+                             IsoGmt(TimeCurrent())));
+   return(true);
+  }
+
+//--- Returns true when the day's loss has tripped the breaker.
+bool CircuitBreakerHit(double pnlToday)
+  {
+   if(InpHardStopPct <= 0.0)
+      return(false);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double base = balance - pnlToday;             // balance at the start of the day
+   if(base <= 0.0)
+      return(false);
+   double lossPct = -pnlToday / base * 100.0;
+   if(lossPct < InpHardStopPct)
+      return(false);
+
+   if(!IsLocked())
+     {
+      GlobalVariableSet(LOCK_DAY_VAR, TodayKey());
+      GlobalVariableSet(LOCK_PCT_VAR, lossPct);
+      PrintFormat("CrowConcept: *** CIRCUIT BREAKER *** daily loss %.2f%% >= %.2f%%. "
+                  "Trading is locked until released.", lossPct, InpHardStopPct);
+      JournalWrite(StringFormat(
+         "{\"kind\":\"circuit_breaker\",\"ts\":\"%s\",\"loss_pct\":%.2f,\"loss\":%.2f}",
+         IsoGmt(TimeCurrent()), lossPct, pnlToday));
+      if(!InpHaltRequiresReview)
+         ReleaseLock();                          // just sit out the day
+     }
+   return(true);
+  }
+
+//====================================================================
+// Journal - written so the Python review tool can read it directly:
+//   python3 -m crowcode review --journal <MQL5/Files>/crowcode_journal.jsonl
+//====================================================================
+string IsoGmt(datetime serverTime)
+  {
+   datetime gmt = serverTime - (TimeCurrent() - TimeGMT());
+   MqlDateTime dt;
+   TimeToStruct(gmt, dt);
+   return(StringFormat("%04d-%02d-%02dT%02d:%02d:%02d+00:00",
+                       dt.year, dt.mon, dt.day, dt.hour, dt.min, dt.sec));
+  }
+
+void JournalWrite(string line)
+  {
+   if(!InpWriteJournal)
+      return;
+   int h = FileOpen(JOURNAL_FILE, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE)
+      return;
+   FileSeek(h, 0, SEEK_END);
+   FileWriteString(h, line + "\r\n");
+   FileClose(h);
+  }
+
+void JournalOrder(ulong ticket, int dir, bool market, double entry, double sl,
+                  double tp, double lots, string zone, double rr)
+  {
+   JournalWrite(StringFormat(
+      "{\"kind\":\"order\",\"ts\":\"%s\",\"result_ticket\":%I64u,\"side\":\"%s\","
+      "\"type\":\"%s\",\"entry\":%.*f,\"sl\":%.*f,\"tp\":%.*f,\"volume\":%.2f,"
+      "\"rr\":%.2f,\"reasons\":[\"%s\",\"%s\"]}",
+      IsoGmt(TimeCurrent()), ticket, (dir == DIR_BULL ? "buy" : "sell"),
+      (market ? "market" : "limit"),
+      g_digits, entry, g_digits, sl, g_digits, tp, lots, rr,
+      StringFormat("HTF(%s)", EnumToString(InpHTF)),
+      StringFormat("POI: %s", zone)));
+  }
+
+//--- Called when a tracked position has disappeared: resolve it from history.
+void JournalClosed(ulong ticket, double risk)
+  {
+   if(!InpWriteJournal)
+      return;
+   if(!HistorySelectByPosition(ticket))
+      return;
+
+   double pnl = 0.0, vol = 0.0;
+   datetime opened = 0, closed = 0;
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      ulong d = HistoryDealGetTicket(i);
+      if(d == 0)
+         continue;
+      pnl += HistoryDealGetDouble(d, DEAL_PROFIT)
+           + HistoryDealGetDouble(d, DEAL_COMMISSION)
+           + HistoryDealGetDouble(d, DEAL_SWAP);
+      datetime t = (datetime)HistoryDealGetInteger(d, DEAL_TIME);
+      if(HistoryDealGetInteger(d, DEAL_ENTRY) == DEAL_ENTRY_IN)
+        {
+         opened = t;
+         vol = HistoryDealGetDouble(d, DEAL_VOLUME);
+        }
+      else if(t > closed)
+         closed = t;
+     }
+   if(opened == 0 || vol <= 0.0)
+      return;
+
+   double riskMoney = risk * MoneyPerPriceUnit(vol);
+   double r = (riskMoney > 0.0) ? pnl / riskMoney : 0.0;
+   JournalWrite(StringFormat(
+      "{\"kind\":\"closed\",\"ts\":\"%s\",\"ticket\":%I64u,\"pnl\":%.2f,\"r\":%.2f,"
+      "\"volume\":%.2f,\"opened_at\":\"%s\",\"closed_at\":\"%s\"}",
+      IsoGmt(TimeCurrent()), ticket, pnl, r, vol, IsoGmt(opened), IsoGmt(closed)));
   }
 
 //====================================================================
@@ -1148,7 +1326,11 @@ void CleanupGlobals()
       string idPart = StringSubstr(name, 5);
       ulong  ticket = (ulong)StringToInteger(idPart);
       if(ticket != 0 && !PositionSelectByTicket(ticket))
+        {
+         if(StringFind(name, "CC_R_") == 0)
+            JournalClosed(ticket, GlobalVariableGet(name));   // record before forgetting
          GlobalVariableDel(name);
+        }
      }
   }
 

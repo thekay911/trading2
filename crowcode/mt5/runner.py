@@ -26,6 +26,7 @@ from crowcode.mt5.broker import (
     AccountInfo, Broker, DealInfo, OrderResult, PositionInfo, Side, SymbolInfo,
 )
 from crowcode.mt5.journal import Journal
+from crowcode.mt5.lockout import LockoutStore
 from crowcode.risk import RiskState, position_size
 from crowcode.sessions import NewsEvent
 from crowcode.signals import Signal
@@ -43,6 +44,7 @@ class LiveConfig:
     dry_run: bool = True             # True 면 주문을 만들되 전송하지 않는다
     comment: str = "crowcode"
     state_path: str = "state/crowcode_state.json"
+    lockout_path: str = "state/lockout.json"
     max_spread_points: int = 60      # 스프레드가 넓으면 진입하지 않는다
     be_buffer_points: int = 10       # 본절 이동 시 수수료·스프레드 여유
     poll_seconds: int = 5
@@ -60,6 +62,7 @@ class _Managed:
     volume: float
     moved_to_be: bool = False
     partial_done: bool = False
+    opened_at: str = ""
 
     @property
     def risk(self) -> float:
@@ -86,6 +89,7 @@ class LiveRunner:
         self._last_bar_ts: datetime | None = None
         self._pending_placed: dict[int, str] = {}   # ticket -> 배치 시각 ISO
         self.managed: dict[int, _Managed] = {}
+        self.lockout = LockoutStore(live.lockout_path)
         self._reject_counts: dict[str, int] = {}
         self._last_reject: str | None = None
         self._last_summary: datetime | None = None
@@ -118,6 +122,14 @@ class LiveRunner:
         self._manage_positions(positions, info, pendings)
         self._review_pendings(pendings, now)
 
+        # 잠금 중에는 신규 진입만 막는다. 열린 포지션 관리는 계속해야 한다
+        # (관리까지 멈추면 손절도 본절도 안 옮겨진다).
+        locked = self.lockout.current()
+        if locked is not None and locked.active:
+            self._note_reject("locked", f"서킷브레이커 잠금 ({locked.trading_day}) — "
+                                        "복기 후 release 로 해제", now)
+            return None
+
         if positions or pendings:
             return None                                    # 한 번에 한 셋업만
 
@@ -132,6 +144,10 @@ class LiveRunner:
         self._maybe_summary(now)
 
         risk = self._risk_state(acct, now)
+
+        if self._check_circuit_breaker(risk, acct, now):
+            return None
+
         ok, why = risk.can_trade(now, self.cfg)
         if not ok:
             self._note_reject("risk_gate", why, last_bar.ts)
@@ -152,6 +168,31 @@ class LiveRunner:
 
         self._place(sig, info, acct, tick)
         return sig
+
+    def _check_circuit_breaker(self, risk: RiskState, acct: AccountInfo, now: datetime) -> bool:
+        """당일 손실이 서킷브레이커에 닿으면 잠근다. 잠기면 True."""
+        cfg = self.cfg
+        if cfg.hard_stop_loss_pct <= 0:
+            return False
+        base = risk.balance - risk.pnl_today          # 그날 시작 잔고
+        if base <= 0:
+            return False
+        loss_pct = -risk.pnl_today / base * 100.0
+        if loss_pct < cfg.hard_stop_loss_pct:
+            return False
+
+        lock = self.lockout.lock(
+            reason=f"당일 손실 {loss_pct:.2f}% 가 서킷브레이커 {cfg.hard_stop_loss_pct}% 도달",
+            balance=acct.balance, loss_amount=risk.pnl_today,
+            loss_pct=loss_pct, trades=risk.trades_today, now=now,
+        )
+        self.journal.write("circuit_breaker", trading_day=lock.trading_day,
+                           loss_pct=round(loss_pct, 2), loss=round(risk.pnl_today, 2),
+                           trades=risk.trades_today, balance=round(acct.balance, 2))
+        if not cfg.halt_requires_review:
+            # 복기를 강제하지 않는 설정이면 그날만 쉬고 다음 날 자동 해제한다.
+            self.lockout.release("halt_requires_review=False → 자동 해제", now)
+        return True
 
     def _note_reject(self, rule: str, detail: str, bar_ts: datetime) -> None:
         """기각 사유는 집계해 두고, 사유가 바뀔 때만 한 줄 남긴다.
@@ -185,6 +226,7 @@ class LiveRunner:
         alive = {p.ticket for p in positions} | {o.ticket for o in pendings}
         for ticket in list(self.managed):
             if ticket not in alive:
+                self._journal_close(self.managed[ticket])
                 del self.managed[ticket]
                 self._save_state()
 
@@ -208,6 +250,28 @@ class LiveRunner:
                 self._move_to_breakeven(p, m, info, price)
             if not m.partial_done and r >= self.cfg.partial_at_r and self.cfg.partial_fraction > 0:
                 self._take_partial(p, m, info)
+
+    def _journal_close(self, m: _Managed) -> None:
+        """청산된 포지션의 실현 손익을 기록한다. 복기는 이 기록으로 돌아간다."""
+        try:
+            since = self.broker.now() - timedelta(days=7)
+            deals = [d for d in self.broker.deals_since(self.live.symbol, self.live.magic, since)
+                     if d.ticket == m.ticket and d.entry == "out"]
+        except Exception:                                   # 기록 실패가 매매를 막으면 안 된다
+            deals = []
+        if not deals:
+            self.journal.write("closed", ticket=m.ticket, detail="체결 내역 조회 실패")
+            return
+        pnl = sum(d.profit for d in deals)
+        risk_money = m.risk * m.volume * self.cfg.contract_size
+        self.journal.write(
+            "closed", ticket=m.ticket, pnl=round(pnl, 2),
+            r=round(pnl / risk_money, 2) if risk_money > 0 else 0.0,
+            entry=m.entry, initial_sl=m.initial_sl, tp=m.tp, volume=m.volume,
+            moved_to_be=m.moved_to_be, partial_done=m.partial_done,
+            opened_at=m.opened_at,
+            closed_at=max(d.closed_at for d in deals),
+        )
 
     def _move_to_breakeven(self, p: PositionInfo, m: _Managed, info: SymbolInfo, price: float) -> None:
         buf = self.live.be_buffer_points * info.point
@@ -336,7 +400,8 @@ class LiveRunner:
                 type="market", **payload)
             if res.ok and res.ticket:
                 self.managed[res.ticket] = _Managed(
-                    res.ticket, res.price or entry, sl, tp, lots)
+                    res.ticket, res.price or entry, sl, tp, lots,
+                    opened_at=self.broker.now().isoformat())
                 self._save_state()
             return
 
@@ -353,7 +418,8 @@ class LiveRunner:
             type="limit", expires=expires, **payload)
         if res.ok and res.ticket:
             self._pending_placed[res.ticket] = self.broker.now().isoformat()
-            self.managed[res.ticket] = _Managed(res.ticket, entry, sl, tp, lots)
+            self.managed[res.ticket] = _Managed(res.ticket, entry, sl, tp, lots,
+                                                opened_at=self.broker.now().isoformat())
             self._save_state()
 
     # ==================================================================

@@ -82,7 +82,13 @@ class CrowConfig:
     max_entries_per_setup: int = 2    # [출처] "한 셋업에 최대 2번 분할 진입"
 
     max_consecutive_losses: int = 2   # [출처] "2번 손절 나면 그날은 끝"
-    max_daily_loss_pct: float = 3.0
+    max_daily_loss_pct: float = 3.0   # 당일 소프트 한도 — 다음 날 자동 해제
+
+    # 계좌 서킷브레이커: 도달하면 '복기 전까지' 잠근다.
+    # 위의 일일 한도와 다른 점은 자정에 자동으로 풀리지 않는다는 것이다.
+    # 진 날을 그냥 넘기지 않고 원인을 확인한 뒤 재개하기 위한 장치.
+    hard_stop_loss_pct: float = 10.0
+    halt_requires_review: bool = True  # False 면 다음 날 자동 해제
     max_trades_per_day: int = 5       # [출처] "M15 기준 하루 5~8 시그널"
     max_leverage: int = 50            # [출처] "Exness 레버리지 1:50 또는 1:20 으로 낮춰라"
 
@@ -147,6 +153,11 @@ class CrowConfig:
             out.append(
                 f"[경고] 거래당 리스크 {self.risk_pct}% 는 파산 지향 설정이다. "
                 "소액 전용 계좌에서만 쓸 것")
+        if self.hard_stop_loss_pct and self.hard_stop_loss_pct <= self.max_daily_loss_pct:
+            out.append(
+                f"[주의] 서킷브레이커 {self.hard_stop_loss_pct}% ≤ 일일 한도 "
+                f"{self.max_daily_loss_pct}% → 일일 한도가 먼저 걸려 서킷브레이커는 "
+                "사실상 작동하지 않는다")
         if self.breakeven_at_r >= self.target_rr:
             out.append(
                 f"[주의] 본절 이동 {self.breakeven_at_r}R 이 목표 {self.target_rr}R 이상 "
@@ -197,14 +208,14 @@ SCALP = CrowConfig(
 
 # [출처] "M1 은 SL 이 2~3핍이라 스프레드에 죽는다 → 소액 고위험 계좌로만"
 #        "X10 sau 2 ngày" — 2일 만에 10배. 반대로 2일 만에 0이 될 수도 있다.
-# 채널이 말한 6% 리스크를 그대로 두되, 일일 한도를 리스크×연속손절에 맞춰
-# 규칙끼리 모순되지 않게 했다 (6% × 3회 = 18%).
+# 채널이 말한 6% 리스크는 그대로 두되, 한도는 서킷브레이커(10%)와
+# 모순되지 않게 맞췄다. 6% 리스크면 두 번째 손절에서 서킷이 걸린다.
 HIGH_RISK = CrowConfig(
     name="highrisk",
     htf="M15", mtf="M5", ltf="M1",
     risk_pct=6.0, target_rr=3.0, min_rr=1.5,
-    max_trades_per_day=20, max_consecutive_losses=3,
-    max_daily_loss_pct=18.0,
+    max_trades_per_day=20, max_consecutive_losses=2,
+    max_daily_loss_pct=9.0,
     limit_expiry_bars=30, sl_buffer_atr=0.2, max_leverage=20,
     min_sl_price=0.8, max_sl_price=4.0,
     max_spread_ratio=0.20,

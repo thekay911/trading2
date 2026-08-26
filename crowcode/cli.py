@@ -8,12 +8,16 @@
   python -m crowcode live     --symbol XAUUSD --preset scalp            # 드라이런
   python -m crowcode live     --symbol XAUUSD --preset scalp --live     # 실주문
   python -m crowcode live     --paper --bars 25000                      # 단말 없이 시뮬레이션
+  python -m crowcode status                                             # 잠금 상태 확인
+  python -m crowcode review   --journal state/journal.jsonl --csv d.csv --html r.html
+  python -m crowcode release  --note "손절 버퍼 0.3→0.5 로 수정"
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from crowcode.config import PRESETS, preset
@@ -22,6 +26,35 @@ from crowcode.data import load_csv, synthetic
 from crowcode.risk import RiskState, split_capital
 from crowcode.strategy import CrowStrategy
 from crowcode.backtest import Backtester
+
+
+def _overrides(args, cfg):
+    """--set key=value 로 설정을 덮어쓴다 (타입은 원본 필드에서 추론)."""
+    pairs = getattr(args, "set", None) or []
+    if not pairs:
+        return cfg
+    changes = {}
+    for item in pairs:
+        if "=" not in item:
+            raise SystemExit(f"--set 형식이 잘못됨: {item} (key=value)")
+        key, raw = item.split("=", 1)
+        key = key.strip()
+        if not hasattr(cfg, key):
+            raise SystemExit(f"알 수 없는 설정 항목: {key}")
+        cur = getattr(cfg, key)
+        try:
+            if isinstance(cur, bool):
+                changes[key] = raw.strip().lower() in ("1", "true", "yes", "on")
+            elif isinstance(cur, int):
+                changes[key] = int(raw)
+            elif isinstance(cur, float):
+                changes[key] = float(raw)
+            else:
+                changes[key] = raw
+        except ValueError:
+            raise SystemExit(f"{key} 값을 해석할 수 없음: {raw}")
+    print("설정 덮어쓰기:", ", ".join(f"{k}={v}" for k, v in changes.items()))
+    return cfg.with_(**changes)
 
 
 def _news(args):
@@ -36,7 +69,7 @@ def _series(args):
 
 
 def cmd_signal(args) -> int:
-    cfg = preset(args.preset)
+    cfg = _overrides(args, preset(args.preset))
     s = _series(args)
     strat = CrowStrategy(cfg, args.symbol, _news(args))
     sig = strat.evaluate(s, args.balance, RiskState(balance=args.balance))
@@ -49,7 +82,7 @@ def cmd_signal(args) -> int:
 
 
 def cmd_backtest(args) -> int:
-    cfg = preset(args.preset)
+    cfg = _overrides(args, preset(args.preset))
     s = _series(args)
     bt = Backtester(cfg, args.balance, args.symbol, spread=args.spread,
                     swap_per_lot_night=args.swap, news=_news(args),
@@ -61,7 +94,28 @@ def cmd_backtest(args) -> int:
             print(f"  {t.opened_at:%Y-%m-%d %H:%M} {t.signal.side:<4} "
                   f"{t.signal.entry:.3f} → {t.exit_price:.3f}  "
                   f"{t.outcome:<10} {t.r_multiple:+.2f}R  {t.pnl:+.2f}")
+
+    if args.review or args.review_html:
+        from crowcode import review as rv
+
+        trades = rv.from_backtest(res)
+        rv.enrich(trades, s)
+        diag = rv.diagnose(trades, cfg)
+        if args.review:
+            print()
+            print(rv.text_report(diag, "백테스트 복기"))
+        if args.review_html:
+            _write_html(args.review_html, rv.html_report(diag, s, "백테스트 복기"))
     return 0
+
+
+def _write_html(path: str, content: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    print(f"HTML 리포트: {path}")
 
 
 def cmd_rules(args) -> int:
@@ -170,6 +224,65 @@ def cmd_preflight(args) -> int:
         broker.shutdown()
 
 
+def cmd_status(args) -> int:
+    from crowcode.mt5.lockout import LockoutStore
+
+    store = LockoutStore(args.lockout)
+    cur = store.current()
+    if cur is None:
+        print("잠금 없음 — 매매 가능 상태.")
+    else:
+        print(cur.summary())
+    hist = store.history()
+    if hist:
+        print(f"\n지난 잠금 {len(hist)}건")
+        for h in hist[-5:]:
+            print(f"  {h.trading_day}  손실 {h.loss_pct:.2f}%  "
+                  f"해제 {h.released_at or '-'}  메모: {h.released_note or '-'}")
+    return 1 if store.is_locked() else 0
+
+
+def cmd_release(args) -> int:
+    from crowcode.mt5.lockout import LockoutStore
+
+    if not args.note or len(args.note.strip()) < 5:
+        print("해제하려면 --note 에 복기 내용을 남겨야 한다.\n"
+              '예: --release --note "손실 5건 중 4건이 stop_hunted → sl_buffer_atr 0.3→0.5"')
+        return 1
+    store = LockoutStore(args.lockout)
+    released = store.release(args.note.strip())
+    if released is None:
+        print("활성 잠금이 없다. 해제할 것이 없음.")
+        return 0
+    print(f"잠금 해제됨 ({released.trading_day} 발생분).")
+    print(f"  메모: {released.released_note}")
+    print("다음 매매부터 정상 동작한다.")
+    return 0
+
+
+def cmd_review(args) -> int:
+    from crowcode import review as rv
+
+    cfg = _overrides(args, preset(args.preset))
+    records = rv.load_journal(args.journal)
+    trades = rv.build_trades(records)
+    if not trades:
+        print(f"복기할 거래가 없다: {args.journal}")
+        print("러너가 'closed' 기록을 남긴 뒤에 다시 실행할 것.")
+        return 1
+
+    series = load_csv(args.csv, args.symbol, args.timeframe) if args.csv else None
+    if series is None:
+        print("주의: --csv 가 없어 최대도달/최대역행을 계산하지 못한다. "
+              "판정 정확도가 크게 떨어진다.\n")
+    rv.enrich(trades, series)
+    diag = rv.diagnose(trades, cfg)
+    print(rv.text_report(diag))
+    if args.html:
+        _write_html(args.html, rv.html_report(diag, series))
+    return 0
+
+
 def cmd_gold(args) -> int:
     from crowcode.gold import REFERENCE
 
@@ -217,6 +330,10 @@ def main(argv=None) -> int:
     common.add_argument("--bars", type=int, default=6000, help="CSV 미지정 시 합성 봉 수")
     common.add_argument("--base-minutes", type=int, default=1, dest="base_minutes",
                         help="합성 데이터의 기준 봉 길이(분)")
+    common.add_argument("--set", action="append", metavar="KEY=VALUE",
+                        help="설정 덮어쓰기. 예: --set sl_buffer_atr=0.5 --set target_rr=2.5")
+    common.add_argument("--lockout", default="state/lockout.json",
+                        help="서킷브레이커 잠금 파일")
     common.add_argument("--news", default="",
                         help="차단할 지표 시각(GMT). 예: \"CPI@2026-09-11 12:30, 2026-10-02 12:30\"")
 
@@ -235,6 +352,8 @@ def main(argv=None) -> int:
     s2.add_argument("--warmup", type=int, default=600)
     s2.add_argument("--eval-every", type=int, default=5, dest="eval_every")
     s2.add_argument("--trades", action="store_true")
+    s2.add_argument("--review", action="store_true", help="끝나고 복기 리포트도 출력")
+    s2.add_argument("--review-html", dest="review_html", help="복기 리포트를 HTML 로 저장")
     s2.set_defaults(func=cmd_backtest)
 
     s3 = sub.add_parser("rules", help="프리셋 파라미터 출력", parents=[common])
@@ -280,6 +399,18 @@ def main(argv=None) -> int:
 
     s8 = sub.add_parser("gold", help="XAUUSD 기준 수치와 필요 자본", parents=[common])
     s8.set_defaults(func=cmd_gold)
+
+    s9 = sub.add_parser("status", help="서킷브레이커 잠금 상태", parents=[common])
+    s9.set_defaults(func=cmd_status)
+
+    s10 = sub.add_parser("release", help="복기 후 잠금 해제", parents=[common])
+    s10.add_argument("--note", default="", help="무엇을 확인했고 무엇을 고쳤는지 (필수)")
+    s10.set_defaults(func=cmd_release)
+
+    s11 = sub.add_parser("review", help="매매 기록 복기", parents=[common])
+    s11.add_argument("--journal", default="state/journal.jsonl")
+    s11.add_argument("--html", help="HTML 리포트 저장 경로")
+    s11.set_defaults(func=cmd_review)
 
     args = p.parse_args(argv)
     return args.func(args)
