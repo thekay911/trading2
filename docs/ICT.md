@@ -74,24 +74,28 @@ python3 -m ict study --csv XAUUSD_M5.csv --since 2018-01-01
 2018년부터의 M5 데이터가 필요하다. **회원님 MT5 에서 직접 받아야 한다** —
 이 저장소에서 접근 가능한 무료 소스는 전부 막혀 있다.
 
-### 받는 법 1 — MT5 (권장, 2018년부터 가능)
+### 받는 법 1 — MT5 / TradingView 내보내기 (권장)
 
-MT5 → 도구 → 퀀트 데이터 / 심볼 → XAUUSD → M5 → 내보내기,
-그 뒤 `python3 tools/mt5_to_csv.py --server-offset 2` (엑스네스는 2 또는 3).
+세미콜론 구분 `Date;Open;High;Low;Close;Volume` 형식이면 그대로 변환된다.
+
+```bash
+python3 tools/tv_to_csv.py XAU_30m_data.csv --out xau_m30.csv --detect
+```
+
+`--detect` 는 서버시간 오프셋을 **데이터에서 추정한다**. 금 선물은 뉴욕
+17~18시에 쉬는데, 그 휴장이 서버시간 몇 시에 오는지 세면 오프셋이 나온다.
+직접 줄 거면 `--server-offset 2` (엑스네스 등 대부분의 MT5 브로커).
+
+**여기가 틀리면 킬존이 통째로 밀린다.** 준 값과 추정값이 다르면 경고한다.
 
 ### 받는 법 2 — 바로 받기 (최근 구간만)
-
-MT5 내보내기가 번거로우면 이걸로 즉시 실측할 수 있다.
 
 ```bash
 python3 tools/fetch_gold.py --interval 5m --out gold_m5.csv   # 최근 60일
 python3 tools/fetch_gold.py --interval 1h --out gold_h1.csv   # 최근 730일
-python3 -m ict study --csv gold_m5.csv
 ```
 
-COMEX 금 선물(GC=F)이다. **XAUUSD 현물이 아니다** — 선물은 보유비용만큼
-현물보다 비싸다. 세션·구조·변동성 패턴은 사실상 같이 움직이므로 개념
-검증에는 쓸 만하지만, 절대가격과 스프레드는 브로커 값과 다르다.
+COMEX 금 선물(GC=F)이다. **XAUUSD 현물이 아니다.**
 
 ### 형식
 
@@ -117,28 +121,39 @@ python3 tools/mt5_to_csv.py 내보낸파일.csv --out XAUUSD_M5.csv --server-off
 
 ---
 
-## 4. 모델 6종
+## 4. 모델 6종 + TJR
 
 전부 `ict/strategy.py` 에 있고, 같은 `Market` 위에서 돈다.
 
-| 모델 | ICT 정의 | 진입 | 손절 |
+| 모델 | 정의 | 진입 | 손절 |
 |---|---|---|---|
-| `ICT2022` | 습격 → 변위 MSS → PD Array 복귀 | 변위가 남긴 FVG 의 **CE(50%)** 지정가 | 습격 극점 바깥 |
-| `SilverBullet` | 뉴욕 10~11시(및 14~15시) 창 안에서 생긴 FVG | 그 FVG 의 CE | 습격 극점 / 갭 바깥 |
-| `TurtleSoup` | 풀을 뚫고 **종가가 되돌아온** 가짜 돌파 | 털린 레벨 그 자리 | 꼬리 극점 바깥 |
-| `JudasSwing` | PO3 — 아시아 레인지 한쪽을 털고(조작) 반대로 | 반전 변위의 FVG | 조작 극점 바깥 |
-| `OTE` | 변위 레그의 62~79% 되돌림 | 시장가(이미 그 구간) | 레그 극점 바깥 |
 | `Unicorn` | 브레이커와 FVG 가 겹치는 자리 | 겹침 구간 중간 | 겹침 바깥 |
+| `JudasSwing` | PO3 — 세션 레인지 한쪽을 털고 반대로 | 반전 변위의 FVG | 조작 극점 바깥 |
+| `TurtleSoup` | 풀을 뚫고 **종가가 되돌아온** 가짜 돌파 | 털린 레벨 그 자리 | 꼬리 극점 바깥 |
+| `TJR` | 스윕 → 변위 → **기원 오더블록** 되돌림 | 충격이 시작된 마지막 반대색 캔들 | 스윕한 꼬리 바깥 |
+| `OTE` | 변위 레그의 62~79% 되돌림 | 시장가(이미 그 구간) | 레그 극점 바깥 |
+| `ICT2022` | 습격 → 변위 MSS → PD Array 복귀 | FVG 의 **CE(50%)** | 습격 극점 바깥 |
+| `SilverBullet` | 뉴욕 10~11시 창 안에서 생긴 FVG | 그 FVG 의 CE | 습격/갭 바깥 |
+
+`TJR` 은 [TJR Trades](https://www.youtube.com/@TJRTrades) 가 공개적으로
+설명하는 순서를 그대로 옮긴 것이다. **영상은 보지 못했다** — 공개 문서로
+정리된 그의 규칙을 근거로 했다.
+
+  1. HTF 편향 → 2. 명확한 유동성(동일 고저·안 건드린 스윙) →
+  3. 스윕: 꼬리가 뚫고 **종가는 다시 안으로** (봉이 열려 있는 동안은 스윕이 아니다) →
+  4. 구조 전환 → 5. **기원 오더블록**으로 되돌아올 때 진입 →
+  6. 손절은 유동성을 가져간 꼬리 바깥 → 7. 목표는 반대편 유동성
+
+ICT2022 와 재료는 같고 **진입 자리만 다르다** — ICT2022 는 FVG 중간(CE),
+TJR 은 충격이 시작된 오더블록. 21년 실측에서 TJR 쪽이 더 일관됐다
+(TJR +0.049R / ICT2022 +0.047R 이지만 격자 전체 모양이 TJR 이 안정적).
 
 ```bash
-python3 -m ict setups   --days 60                     # 셋업 목록
-python3 -m ict backtest --days 250                    # 모델별 성적표
-python3 -m ict backtest --models SilverBullet,ICT2022 # 골라서
-python3 -m ict bias     --days 60                     # 오늘의 DOL
-python3 -m ict profile  --days 60                     # 지금 가격대의 임계값
+python3 -m ict plays                     # 모델별 계획과 채택 근거
+python3 -m ict backtest --csv XAU.csv    # 모델별 성적표
+python3 -m ict study    --csv XAU.csv    # 개념 실측
+python3 -m ict bias     --csv XAU.csv    # 오늘의 DOL
 ```
-
-`--csv` 를 주면 실제 데이터로, 안 주면 `ict/sample.py` 시뮬레이션으로 돈다.
 
 ---
 

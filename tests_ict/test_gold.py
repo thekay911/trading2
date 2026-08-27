@@ -65,12 +65,52 @@ class TestScaling(unittest.TestCase):
 class TestFvgFloor(unittest.TestCase):
     def test_min_fvg_never_drops_below_twice_the_spread(self):
         """스프레드보다 작은 갭은 갭이 아니라 호가 잡음이다."""
-        dead = v(3300.0, 0.01)
-        self.assertGreaterEqual(STANDARD.min_fvg(dead), STANDARD.spread * 2)
+        for price in (384.0, 1300.0, 3300.0, 4600.0):
+            dead = v(price, 0.001)
+            self.assertGreaterEqual(STANDARD.min_fvg(dead),
+                                    STANDARD.spread_at(price) * 2,
+                                    f"금 {price}")
 
-    def test_raw_account_allows_smaller_gaps(self):
-        dead = v(3300.0, 0.01)
-        self.assertLess(RAW.min_fvg(dead), STANDARD.min_fvg(dead))
+    def test_a_wider_spread_raises_the_floor(self):
+        dead = v(3300.0, 0.001)
+        wide = STANDARD.with_(spread=2.0, spread_bp=20.0)
+        self.assertGreater(wide.min_fvg(dead), STANDARD.min_fvg(dead))
+
+
+class TestSpreadScalesWithPrice(unittest.TestCase):
+    """$0.25 는 금이 $4,600 일 때의 값이다. 2004년 금은 $384 였다."""
+
+    def test_cheap_gold_gets_a_smaller_spread(self):
+        self.assertLess(STANDARD.spread_at(384.0), STANDARD.spread_at(4600.0))
+
+    def test_it_never_exceeds_the_quoted_dollar_spread(self):
+        for price in (384.0, 1300.0, 3300.0, 4600.0, 20000.0):
+            self.assertLessEqual(STANDARD.spread_at(price), STANDARD.spread)
+
+    def test_the_stop_floor_follows_the_price_level(self):
+        """스프레드가 손절폭의 15% 를 넘으면 안 되므로, 최소 손절폭도 따라간다."""
+        cheap = STANDARD.spread_at(384.0) / STANDARD.max_spread_to_stop
+        now = STANDARD.spread_at(4600.0) / STANDARD.max_spread_to_stop
+        self.assertLess(cheap, now)
+        self.assertAlmostEqual(now, 1.6667, places=3)
+
+    def test_spread_ok_uses_the_price_when_given(self):
+        """금 $384 에서 $0.20 손절은 통과, 금 $4,600 에서는 거부."""
+        self.assertTrue(STANDARD.spread_ok(0.20, price=384.0))
+        self.assertFalse(STANDARD.spread_ok(0.20, price=4600.0))
+
+    def test_without_a_price_it_falls_back_to_the_dollar_spread(self):
+        self.assertFalse(STANDARD.spread_ok(1.00))
+        self.assertTrue(STANDARD.spread_ok(2.00))
+
+    def test_raw_account_is_tighter_at_every_level(self):
+        for price in (384.0, 1300.0, 3300.0, 4600.0):
+            self.assertLess(RAW.spread_at(price), STANDARD.spread_at(price),
+                            f"금 {price}")
+
+    def test_zero_bp_disables_scaling(self):
+        flat = STANDARD.with_(spread_bp=0.0)
+        self.assertAlmostEqual(flat.spread_at(384.0), flat.spread)
 
 
 class TestSpreadGate(unittest.TestCase):

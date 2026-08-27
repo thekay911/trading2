@@ -70,7 +70,7 @@ def _build(m: Market, now: int, model: str, side: Side, entry: float, stop: floa
            cfg: Config) -> Setup | None:
     gold = m.gold
     risk = abs(entry - stop)
-    if risk <= 0 or not gold.spread_ok(risk):
+    if risk <= 0 or not gold.spread_ok(risk, m.candles[now].close):
         return None
     # 너무 먼 지정가는 채워질 때쯤 근거가 이미 죽어 있다. 모든 모델 공통.
     if abs(entry - m.candles[now].close) > m.volatility(now).atr * gold.max_entry_distance_atr:
@@ -335,6 +335,68 @@ def unicorn(m: Market, now: int, cfg: Config) -> Setup | None:
                   ["브레이커와 FVG 겹침 (유니콘)"], cfg)
 
 
+
+# ----------------------------------------------------------------------
+# 7. TJR — 스윕 -> 변위 -> 기원(오더블록) 되돌림
+# ----------------------------------------------------------------------
+def tjr(m: Market, now: int, cfg: Config, sweep_within: int = 40) -> Setup | None:
+    """TJR 이 공개적으로 설명하는 순서를 그대로 옮긴 것.
+
+      1. 명확한 유동성 (동일 고저 / 안 건드린 스윙 / 전일 고저)
+      2. 스윕 — 꼬리가 레벨을 뚫고 **종가는 다시 안으로**
+         (봉이 열려 있는 동안 스윕이라 부르지 않는다. 종가로만 확정)
+      3. 구조 전환 — 직전 반대편 스윙을 깬다
+      4. 진입 — 그 충격의 **기원**, 즉 마지막 반대색 캔들(오더블록)로 되돌아올 때
+      5. 손절 — 유동성을 가져간 그 꼬리 바깥
+      6. 목표 — 반대편 유동성 풀
+
+    ICT2022 와 다른 점은 진입 자리다. ICT2022 는 FVG 의 중간(CE)에 걸고,
+    TJR 은 충격이 시작된 오더블록에 건다. 그래서 진입가도 손절폭도 달라진다.
+    """
+    kz = _gate(m, now, cfg)
+    if kz is None:
+        return None
+
+    for side in ("buy", "sell"):
+        raid = _raid(m, now, side, sweep_within)      # type: ignore[arg-type]
+        if raid is None or not raid.closed_back:
+            continue                                   # 종가가 안 돌아왔으면 스윕이 아니다
+
+        direction = BULL if side == "buy" else BEAR
+        mss = m.last_mss(now, cfg.mss_lookback, direction)
+        if mss is None or mss.index < raid.index:
+            continue                                   # 전환은 스윕 뒤에 와야 한다
+
+        d = mss.displacement
+        if d is None:
+            continue
+
+        # 충격의 기원: 변위 구간 안에서 마지막 반대색 캔들
+        ob = pda.order_block(m.candles, mss.index, direction)
+        if ob is None or ob.index < raid.index:
+            continue
+
+        entry = ob.top if side == "buy" else ob.bottom
+        bar = m.candles[now]
+        if (side == "buy" and entry > bar.close) or (side == "sell" and entry < bar.close):
+            continue                                   # 이미 지나간 자리
+
+        v = m.volatility(now)
+        buf = m.gold.stop_buffer(v)
+        stop = raid.extreme - buf if side == "buy" else raid.extreme + buf
+        if (side == "buy" and stop >= entry) or (side == "sell" and stop <= entry):
+            continue
+
+        notes = [f"{raid.pool.label} {raid.pool.price:.2f} 스윕 후 종가 복귀",
+                 f"변위 {d.atr_multiple:.1f}xATR 로 구조 전환",
+                 f"기원 오더블록 {ob.bottom:.2f}~{ob.top:.2f} 되돌림 대기"]
+        s = _build(m, now, "TJR", side, entry, stop, ob, mss, raid,  # type: ignore[arg-type]
+                   kz, notes, cfg)
+        if s:
+            return s
+    return None
+
+
 # ----------------------------------------------------------------------
 MODELS: dict[str, Callable[..., Setup | None]] = {
     "ICT2022": ict2022,
@@ -343,6 +405,7 @@ MODELS: dict[str, Callable[..., Setup | None]] = {
     "JudasSwing": judas_swing,
     "OTE": ote,
     "Unicorn": unicorn,
+    "TJR": tjr,
 }
 
 

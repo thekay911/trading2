@@ -83,7 +83,9 @@ def cmd_backtest(args) -> int:
     names = args.models.split(",") if args.models else (
         list(MODELS) if getattr(args, "all_models", False) else list(ACTIVE))
     setups = scan(m, cfg, names)
-    res = run(s, cfg, spread=g.spread, max_hold=args.max_hold, setups=setups)
+    # --spread 를 안 주면 가격대에 맞춰 프로필이 계산한다
+    res = run(s, cfg, spread=args.spread, max_hold=args.max_hold,
+              setups=setups, gold=g)
     print(res.report(args.title or "ICT 모델 전체"))
     if args.trades:
         print()
@@ -156,7 +158,8 @@ def main(argv=None) -> int:
     common.add_argument("--base-minutes", type=int, default=5, dest="base_minutes")
     common.add_argument("--profile", default="standard", choices=sorted(PROFILES),
                         help="금 프로필 (standard / raw / strict)")
-    common.add_argument("--spread", type=float, help="스프레드(달러). 생략 시 프로필 값")
+    common.add_argument("--spread", type=float,
+                        help="스프레드를 달러로 고정. 생략하면 가격대 비례")
     common.add_argument("--models", help="쉼표로 모델 선택 (예: TurtleSoup,OTE)")
     common.add_argument("--all-models", action="store_true", dest="all_models",
                         help="기본에서 빠진 모델까지 전부 (실측 근거 없음)")

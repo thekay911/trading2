@@ -1,10 +1,10 @@
-; Measured on XAUUSD M30 2004-2026: 5 models, 1-2% risk
+; Unicorn + JudasSwing only - the two strongest measured edges
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=true
-InpUseTurtleSoup=true
-InpUseOTE=true
-InpUseTJR=true
+InpUseTurtleSoup=false
+InpUseOTE=false
+InpUseTJR=false
 InpUNI_TargetRR=4.0
 InpUNI_HoldMin=480
 InpUNI_BreakevenR=0.0

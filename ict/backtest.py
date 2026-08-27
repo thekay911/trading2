@@ -103,7 +103,7 @@ def _key(t: Trade, name: str) -> str:
 
 
 def run(candles: Sequence[Candle], cfg: Config = Config(),
-        spread: float = 0.25, max_hold: int = 288, start: int = 200,
+        spread: float | None = None, max_hold: int = 288, start: int = 200,
         setups: Sequence[Setup] | None = None,
         gold: GoldProfile = STANDARD,
         models: Sequence[str] | None = None,
@@ -121,6 +121,10 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
     models:    쓸 모델 이름들. None 이면 기본 실행 목록(ict.plays.ACTIVE).
     """
     candles = list(candles)
+    # 보유 한도는 봉 수가 아니라 시간이다. 30분봉 데이터에서 M5 봉 수를
+    # 그대로 쓰면 6배를 들고 있게 된다.
+    bar_min = bar_minutes(candles)
+    fixed_spread = spread
     if setups is None:
         setups = scan(Market.build(candles, gold=gold), cfg,
                       models=list(models) if models else list(ACTIVE), start=start)
@@ -128,16 +132,17 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
 
     for s in setups:
         pl: Play | None = PLAYS.get(s.model) if use_plays else None
-        hold = pl.max_hold if pl else max_hold
+        hold = pl.bars_to_hold(bar_min) if pl else max_hold
         risk0 = s.risk
         if risk0 <= 0:
             continue
-        # 계획이 있으면 목표를 그 R 로 자른다. 없으면 셋업의 유동성 목표.
+        # 계획이 있으면 목표는 그 R 이다. 셋업이 들고 있는 유동성 목표로
+        # 자르지 않는다 — 21년 실측에서 목표를 1~1.5R 로 짧게 자르면 전
+        # 모델이 음수가 됐다. 유동성 풀은 방향의 근거지 익절 지점이 아니다.
         target = s.target
         if pl:
-            capped = (s.entry + risk0 * pl.target_rr if s.side == "buy"
+            target = (s.entry + risk0 * pl.target_rr if s.side == "buy"
                       else s.entry - risk0 * pl.target_rr)
-            target = min(target, capped) if s.side == "buy" else max(target, capped)
 
         fill = None
         stop = s.stop
@@ -149,7 +154,8 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
                           (s.side == "sell" and c.high >= s.entry)
                 if not touched:
                     continue
-                fill = s.entry + spread if s.side == "buy" else s.entry - spread
+                sp = fixed_spread if fixed_spread is not None else gold.spread_at(s.entry)
+                fill = s.entry + sp if s.side == "buy" else s.entry - sp
                 if abs(fill - stop) <= 0:
                     break
                 continue
@@ -180,7 +186,18 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
                 trades.append(Trade(s, last_index(candles, last), last.close, last.ts,
                                     "open", r))
 
-    return Result(trades, len(setups), spread)
+    return Result(trades, len(setups),
+                  fixed_spread if fixed_spread is not None else gold.spread)
+
+
+def bar_minutes(candles: Sequence[Candle]) -> float:
+    """시계열의 봉 간격(분). 휴장 구멍에 안 흔들리게 중앙값을 쓴다."""
+    if len(candles) < 3:
+        return 5.0
+    gaps = sorted((candles[i + 1].ts - candles[i].ts).total_seconds() / 60.0
+                  for i in range(min(len(candles) - 1, 500)))
+    m = gaps[len(gaps) // 2]
+    return m if m > 0 else 5.0
 
 
 def last_index(candles: Sequence[Candle], bar: Candle) -> int:

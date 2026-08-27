@@ -147,7 +147,8 @@ class TestSetupIntegrity(Fixture):
     def test_spread_is_never_a_large_share_of_the_stop(self):
         p = self.market.gold
         for s in self.setups:
-            self.assertTrue(p.spread_ok(s.risk), s.describe())
+            self.assertTrue(p.spread_ok(s.risk, self.candles[s.index].close),
+                            s.describe())
 
 
 class TestGatesActuallyGate(Fixture):
@@ -229,11 +230,14 @@ class TestBacktest(Fixture):
                 self.assertLess(t.r, 0)
                 self.assertGreater(t.r, -1.6)   # 스프레드 때문에 -1 을 조금 넘는다
 
-    def test_wins_are_about_plus_target_rr(self):
+    def test_wins_pay_the_plays_target_not_the_liquidity_target(self):
+        """목표는 계획의 R 이다. 셋업이 들고 있는 유동성 목표로 자르지 않는다 —
+        21년 실측에서 1~1.5R 로 짧게 자르면 전 모델이 음수가 됐다."""
+        from ict.plays import PLAYS
         for t in self.res.trades:
             if t.outcome == "target":
-                self.assertGreater(t.r, 0)
-                self.assertLessEqual(t.r, t.setup.rr + 0.5)
+                want = PLAYS[t.setup.model].target_rr
+                self.assertAlmostEqual(t.r, want, delta=0.5, msg=t.setup.describe())
 
     def test_exit_never_precedes_entry(self):
         for t in self.res.trades:

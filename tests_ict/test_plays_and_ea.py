@@ -63,6 +63,29 @@ class TestPlays(unittest.TestCase):
             if p.be_at > 0:
                 self.assertLess(p.be_at, p.target_rr, p.model)
 
+    def test_breakeven_is_off_everywhere(self):
+        """21년 실측: 6개 모델 전부에서 기대값을 낮추고 낙폭을 키웠다."""
+        for p in PLAYS.values():
+            self.assertEqual(p.be_at, 0.0, f"{p.model}: 본전 이동은 실측에서 손해다")
+
+    def test_active_plays_carry_their_measurement(self):
+        for name in ACTIVE:
+            p = PLAYS[name]
+            self.assertGreater(p.trades, 100, f"{name}: 표본이 너무 얇다")
+            self.assertGreater(p.expectancy, 0.0, f"{name}: 기대값이 음수인데 켜져 있다")
+
+    def test_disabled_plays_say_why(self):
+        for name, p in PLAYS.items():
+            if not p.enabled:
+                self.assertGreater(len(p.why), 40, name)
+
+    def test_hold_is_timeframe_independent(self):
+        """같은 계획이 M5/M15/M30 에서 같은 '시간'을 들고 있어야 한다."""
+        for p in PLAYS.values():
+            for tf in (5, 15, 30, 60):
+                self.assertAlmostEqual(p.bars_to_hold(tf) * tf, p.hold_minutes,
+                                       delta=tf, msg=f"{p.model} {tf}분봉")
+
     def test_every_play_records_why(self):
         for p in PLAYS.values():
             self.assertGreater(len(p.why), 40, f"{p.model}: 근거가 없다")
@@ -125,7 +148,8 @@ class TestPlaysChangeTheBacktest(unittest.TestCase):
 class TestEaMatchesPlays(unittest.TestCase):
     """EA 기본값이 파이썬 계획과 같은 숫자여야 한다."""
 
-    PREFIX = {"TurtleSoup": "InpTS_", "JudasSwing": "InpJS_", "OTE": "InpOTE_"}
+    PREFIX = {"Unicorn": "InpUNI_", "JudasSwing": "InpJS_",
+              "TurtleSoup": "InpTS_", "OTE": "InpOTE_", "TJR": "InpTJR_"}
 
     def setUp(self):
         self.ea = ea_inputs()
@@ -139,10 +163,17 @@ class TestEaMatchesPlays(unittest.TestCase):
             self.assertAlmostEqual(float(self.ea[pre + "TargetRR"]),
                                    PLAYS[name].target_rr, msg=name)
 
-    def test_hold_bars_match(self):
+    def test_hold_minutes_match(self):
+        """EA 는 분으로, 파이썬은 M5 봉 수로 들고 있다. 같은 시간이어야 한다."""
         for name, pre in self.PREFIX.items():
-            self.assertEqual(int(self.ea[pre + "HoldBars"]),
-                             PLAYS[name].max_hold, name)
+            self.assertEqual(int(self.ea[pre + "HoldMin"]),
+                             PLAYS[name].hold_minutes, name)
+
+    def test_hold_is_expressed_in_minutes_not_bars(self):
+        """봉 수로 두면 M5 차트와 M30 차트에서 보유시간이 6배 달라진다."""
+        src = EA.read_text()
+        self.assertNotIn("HoldBars", src)
+        self.assertIn("holdMin", src)
 
     def test_breakeven_matches(self):
         for name, pre in self.PREFIX.items():
@@ -155,8 +186,9 @@ class TestEaMatchesPlays(unittest.TestCase):
                                    PLAYS[name].risk_pct, msg=name)
 
     def test_enabled_flags_match(self):
-        flag = {"TurtleSoup": "InpUseTurtleSoup", "JudasSwing": "InpUseJudasSwing",
-                "OTE": "InpUseOTE"}
+        flag = {"Unicorn": "InpUseUnicorn", "JudasSwing": "InpUseJudasSwing",
+                "TurtleSoup": "InpUseTurtleSoup", "OTE": "InpUseOTE",
+                "TJR": "InpUseTJR"}
         for name, key in flag.items():
             self.assertEqual(self.ea[key] == "true", PLAYS[name].enabled, name)
 

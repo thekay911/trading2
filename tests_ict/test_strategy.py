@@ -37,9 +37,9 @@ class Base(unittest.TestCase):
 
 
 class TestCoverage(Base):
-    def test_all_six_models_are_registered(self):
+    def test_all_models_are_registered(self):
         self.assertEqual(set(MODELS), {"ICT2022", "SilverBullet", "TurtleSoup",
-                                       "JudasSwing", "OTE", "Unicorn"})
+                                       "JudasSwing", "OTE", "Unicorn", "TJR"})
 
     def test_the_sample_exercises_most_models(self):
         """한두 모델만 도는 표본으로는 아무것도 검증 못 한다."""

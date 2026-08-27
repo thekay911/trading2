@@ -53,6 +53,20 @@ class Section:
 
 
 # ----------------------------------------------------------------------
+def full_day_bars(days: dict[date, list[Candle]]) -> int:
+    """'거의 하루가 다 있는 날' 의 기준 봉 수.
+
+    M5 는 하루 288봉, M30 은 48봉이다. 50봉으로 고정하면 30분봉
+    데이터에서는 모든 날이 걸러진다 — 표본이 통째로 0 이 된다.
+    중앙값의 60% 를 기준으로 잡아 휴일·반나절만 뺀다.
+    """
+    if not days:
+        return 1
+    counts = sorted(len(v) for v in days.values())
+    med = counts[len(counts) // 2]
+    return max(4, int(med * 0.6))
+
+
 def group_by_day(candles: Sequence[Candle]) -> dict[date, list[Candle]]:
     days: dict[date, list[Candle]] = defaultdict(list)
     for c in candles:
@@ -65,8 +79,9 @@ def killzone_extremes(days: dict[date, list[Candle]]) -> Section:
     hi_count: Counter = Counter()
     lo_count: Counter = Counter()
     total = 0
+    need = full_day_bars(days)
     for day, bars in days.items():
-        if len(bars) < 50:
+        if len(bars) < need:
             continue
         total += 1
         hb = max(bars, key=lambda c: c.high)
@@ -103,9 +118,10 @@ def pd_level_raids(days: dict[date, list[Candle]]) -> Section:
     order = sorted(days)
     took_h = took_l = took_both = neither = 0
     total = 0
+    need = full_day_bars(days)
     for prev, cur in zip(order, order[1:]):
         pb, cb = days[prev], days[cur]
-        if len(pb) < 50 or len(cb) < 50:
+        if len(pb) < need or len(cb) < need:
             continue
         total += 1
         pdh = max(c.high for c in pb)
@@ -137,11 +153,12 @@ def judas_swing(days: dict[date, list[Candle]], open_hour: float = 2.0,
     hits = 0
     total = 0
     sizes: list[float] = []
+    seg = max(3, full_day_bars(days) // 8)
     for day, bars in days.items():
         pre = [c for c in bars if ny_clock(c.ts) < open_hour]
         win = [c for c in bars if open_hour <= ny_clock(c.ts) < open_hour + window_h]
         rest = [c for c in bars if ny_clock(c.ts) >= open_hour + window_h]
-        if len(pre) < 10 or len(win) < 5 or len(rest) < 10:
+        if len(pre) < seg or len(win) < max(2, seg // 2) or len(rest) < seg:
             continue
         total += 1
         ah, al = max(c.high for c in pre), min(c.low for c in pre)
@@ -196,7 +213,7 @@ def power_of_three(days: dict[date, list[Candle]]) -> Section:
     open_near_low = open_near_high = 0
     total = 0
     for day, bars in days.items():
-        if len(bars) < 50:
+        if len(bars) < full_day_bars(days):
             continue
         total += 1
         o, cl = bars[0].open, bars[-1].close
@@ -299,7 +316,7 @@ def mss_followthrough(candles: Sequence[Candle], min_disp_atr: float = 1.0,
 def weekday_profile(days: dict[date, list[Candle]]) -> Section:
     rng: dict[int, list[float]] = defaultdict(list)
     for day, bars in days.items():
-        if len(bars) < 50:
+        if len(bars) < full_day_bars(days):
             continue
         rng[day.weekday()].append(max(c.high for c in bars) - min(c.low for c in bars))
     s = Section("8. 요일별 변동폭")

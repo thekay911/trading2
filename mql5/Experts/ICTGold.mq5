@@ -2,13 +2,22 @@
 //|                                                     ICTGold.mq5  |
 //|   ICT models for XAUUSD, calibrated on real gold data.           |
 //|                                                                  |
-//|   Three models survived measurement on real COMEX gold           |
-//|   (M5 60d + H1 730d). Each has its own target, hold time and     |
-//|   risk, because they operate on different time scales.           |
+//|   Plans measured on real XAUUSD M30, 2004-06 to 2026-01:         |
+//|   248,912 bars, 8,241 setups, 6,185 trades. Each model has its    |
+//|   own target and hold because they run on different clocks.      |
 //|                                                                  |
-//|     TurtleSoup   4.0R   4h hold   BE at 2.0R   risk 2%           |
-//|     JudasSwing   3.0R   3h hold   BE at 1.5R   risk 2%           |
-//|     OTE          1.5R   4h hold   no BE        risk 1%           |
+//|     Unicorn      4.0R    8h hold   risk 2%   (+0.317R, 1224 tr)  |
+//|     JudasSwing   4.0R   24h hold   risk 1%   (+0.435R,  212 tr)  |
+//|     TurtleSoup   4.0R    8h hold   risk 2%   (+0.179R, 3609 tr)  |
+//|     OTE          3.0R   24h hold   risk 1%   (+0.043R, 1223 tr)  |
+//|     TJR          3.0R   24h hold   risk 1%   (+0.049R,  540 tr)  |
+//|                                                                  |
+//|   No breakeven stops. Measured on all six models: moving the     |
+//|   stop to entry lowered expectancy AND raised drawdown. Gold     |
+//|   retraces deep into the entry before it runs.                   |
+//|                                                                  |
+//|   Buy +494.8R vs sell +489.2R over 21 years: symmetric, so       |
+//|   this is not a ride on gold's secular uptrend.                  |
 //|                                                                  |
 //|   Everything is measured relative to ATR or basis points, never  |
 //|   in fixed dollars: gold was 1300 in 2018 and 4600 in 2026.      |
@@ -24,27 +33,41 @@
 // Inputs
 //====================================================================
 input group "=== Models (each has its own plan) ==="
+input bool   InpUseUnicorn      = true;    // Unicorn: breaker overlapping an FVG
+input bool   InpUseJudasSwing   = true;    // JudasSwing: session sweep then reverse
 input bool   InpUseTurtleSoup   = true;    // TurtleSoup: false break of a level
-input bool   InpUseJudasSwing   = true;    // JudasSwing: asian sweep then reverse
 input bool   InpUseOTE          = true;    // OTE: 62-79% of a displacement leg
+input bool   InpUseTJR          = true;    // TJR: sweep -> displacement -> origin OB
 
-input group "=== TurtleSoup plan ==="
-input double InpTS_TargetRR     = 4.0;     // target in R
-input int    InpTS_HoldBars     = 48;      // max hold, M5 bars (48 = 4h)
-input double InpTS_BreakevenR   = 2.0;     // move stop to entry at this R (0 = off)
-input double InpTS_RiskPct      = 2.0;     // risk per trade, % of balance
+input group "=== Unicorn plan (best measured edge) ==="
+input double InpUNI_TargetRR    = 4.0;     // target in R
+input int    InpUNI_HoldMin     = 480;     // max hold in MINUTES (480 = 8h)
+input double InpUNI_BreakevenR  = 0.0;     // measured: breakeven stops hurt
+input double InpUNI_RiskPct     = 2.0;     // risk per trade, % of balance
 
 input group "=== JudasSwing plan ==="
-input double InpJS_TargetRR     = 3.0;
-input int    InpJS_HoldBars     = 36;      // 3h
-input double InpJS_BreakevenR   = 1.5;
-input double InpJS_RiskPct      = 2.0;
+input double InpJS_TargetRR     = 4.0;
+input int    InpJS_HoldMin      = 1440;    // 24h
+input double InpJS_BreakevenR   = 0.0;
+input double InpJS_RiskPct      = 1.0;     // thin sample (212 trades)
+
+input group "=== TurtleSoup plan (largest sample) ==="
+input double InpTS_TargetRR     = 4.0;
+input int    InpTS_HoldMin      = 480;     // 8h
+input double InpTS_BreakevenR   = 0.0;
+input double InpTS_RiskPct      = 2.0;
 
 input group "=== OTE plan ==="
-input double InpOTE_TargetRR    = 1.5;
-input int    InpOTE_HoldBars    = 48;      // 4h
-input double InpOTE_BreakevenR  = 0.0;     // measured: BE hurts this model
-input double InpOTE_RiskPct     = 1.0;
+input double InpOTE_TargetRR    = 3.0;
+input int    InpOTE_HoldMin     = 1440;    // 24h
+input double InpOTE_BreakevenR  = 0.0;
+input double InpOTE_RiskPct     = 1.0;     // thin edge
+
+input group "=== TJR plan ==="
+input double InpTJR_TargetRR    = 3.0;
+input int    InpTJR_HoldMin     = 1440;    // 24h
+input double InpTJR_BreakevenR  = 0.0;
+input double InpTJR_RiskPct     = 1.0;     // TJR's own 1% cap
 
 input group "=== Gold calibration (relative, not dollars) ==="
 input int    InpAtrPeriod       = 20;      // ATR period on the trading timeframe
@@ -59,6 +82,7 @@ input double InpMaxEntryDistATR = 3.0;     // skip limits further than this from
 
 input group "=== Execution guards ==="
 input double InpMaxSpreadToStop = 0.15;    // skip if spread > this fraction of the stop
+input double InpSpreadFloorBP   = 0.55;    // assumed spread as bp of price, for the stop check
 input double InpMaxSpreadPrice  = 0.60;    // hard spread cap in price (dollars)
 input int    InpLimitExpiryBars = 24;      // cancel unfilled limit after N bars (2h)
 input int    InpSwingLeft       = 1;       // fractal bars left
@@ -116,7 +140,7 @@ struct Managed
    double   risk;       // |entry - stop0|
    double   target;
    double   beAtR;
-   int      holdBars;
+   int      holdMin;
    datetime opened;
    bool     movedBE;
 };
@@ -409,7 +433,7 @@ struct Setup
    double   target;
    double   riskPct;
    double   beAtR;
-   int      holdBars;
+   int      holdMin;
    string   why;
 };
 
@@ -417,17 +441,22 @@ void ClearSetup(Setup &s)
 {
    s.ok = false; s.model = ""; s.isBuy = false; s.isLimit = false;
    s.entry = 0; s.stop = 0; s.target = 0; s.riskPct = 0;
-   s.beAtR = 0; s.holdBars = 0; s.why = "";
+   s.beAtR = 0; s.holdMin = 0; s.why = "";
 }
 
 //--- finish a setup: apply the plan's target, and the shared guards
 bool Finish(Setup &s, int now, double targetRR, double riskPct,
-            double beAtR, int holdBars, string model, string why)
+            double beAtR, int holdMin, string model, string why)
 {
    double risk = MathAbs(s.entry - s.stop);
    if(risk <= 0) return false;
 
+   // The live spread can be unrealistically tight in a tester run on
+   // low-quality history. Use at least the modelled bp spread so the
+   // stop check cannot be gamed by the data feed.
    double sp = Spread();
+   double model_sp = BpToPrice(InpSpreadFloorBP, C[now]);
+   if(model_sp > sp) sp = model_sp;
    if(sp > InpMaxSpreadPrice)                      return false;
    if(InpMaxSpreadToStop > 0 && sp > risk * InpMaxSpreadToStop) return false;
 
@@ -440,7 +469,7 @@ bool Finish(Setup &s, int now, double targetRR, double riskPct,
    s.model    = model;
    s.riskPct  = riskPct;
    s.beAtR    = beAtR;
-   s.holdBars = holdBars;
+   s.holdMin  = holdMin;
    s.why      = why;
    s.ok       = true;
    return true;
@@ -490,7 +519,7 @@ bool TurtleSoup(int now, Setup &s)
                s.stop  = H[r] + buf;
                if(s.stop <= s.entry) continue;
                if(Finish(s, now, InpTS_TargetRR, InpTS_RiskPct,
-                         InpTS_BreakevenR, InpTS_HoldBars, "TurtleSoup",
+                         InpTS_BreakevenR, InpTS_HoldMin, "TurtleSoup",
                          StringFormat("false break above %.2f, closed back", lvl)))
                   return true;
             }
@@ -504,7 +533,7 @@ bool TurtleSoup(int now, Setup &s)
                s.stop  = L[r] - buf;
                if(s.stop >= s.entry) continue;
                if(Finish(s, now, InpTS_TargetRR, InpTS_RiskPct,
-                         InpTS_BreakevenR, InpTS_HoldBars, "TurtleSoup",
+                         InpTS_BreakevenR, InpTS_HoldMin, "TurtleSoup",
                          StringFormat("false break below %.2f, closed back", lvl)))
                   return true;
             }
@@ -582,7 +611,7 @@ bool JudasSwing(int now, Setup &s)
    if(!s.isBuy && (s.entry < C[now] || s.stop <= s.entry)) return false;
 
    return Finish(s, now, InpJS_TargetRR, InpJS_RiskPct,
-                 InpJS_BreakevenR, InpJS_HoldBars, "JudasSwing",
+                 InpJS_BreakevenR, InpJS_HoldMin, "JudasSwing",
                  StringFormat("asian %.2f-%.2f %s swept, reversing",
                               al, ah, sweptHigh ? "high" : "low"));
 }
@@ -630,10 +659,166 @@ bool Ote(int now, Setup &s)
    if(!s.isBuy && s.stop <= s.entry) return false;
 
    return Finish(s, now, InpOTE_TargetRR, InpOTE_RiskPct,
-                 InpOTE_BreakevenR, InpOTE_HoldBars, "OTE",
+                 InpOTE_BreakevenR, InpOTE_HoldMin, "OTE",
                  StringFormat("leg %.2f-%.2f, %.0f%% retrace",
                               lo, hi, 100.0 * (s.isBuy ? (hi - px) / size
                                                        : (px - lo) / size)));
+}
+
+
+//====================================================================
+// Model 4: Unicorn
+//   The origin order block of the displacement gets traded through
+//   and becomes a breaker. Where that breaker overlaps an unfilled
+//   FVG from the same leg, you get the highest-conviction zone.
+//   Best measured edge over 21 years: +0.317R on 1,224 trades.
+//====================================================================
+bool FindLegFvg(int ls, int le, int dir, double minGap,
+                double &top, double &bot)
+{
+   for(int k = le - 1; k > ls && k > 1; k--)
+   {
+      if(dir > 0 && L[k+1] > H[k-1] && (L[k+1] - H[k-1]) >= minGap)
+      { top = L[k+1]; bot = H[k-1]; return true; }
+      if(dir < 0 && H[k+1] < L[k-1] && (L[k-1] - H[k+1]) >= minGap)
+      { top = L[k-1]; bot = H[k+1]; return true; }
+   }
+   return false;
+}
+
+//--- last opposing candle before the impulse leaves `ls`..`le`
+bool OriginBlock(int ls, int le, int dir, double &top, double &bot, int &at)
+{
+   for(int k = le; k > ls && k > 0; k--)
+   {
+      bool opposing = (dir > 0) ? (C[k] < O[k]) : (C[k] > O[k]);
+      if(opposing)
+      {
+         top = H[k]; bot = L[k]; at = k;
+         return true;
+      }
+   }
+   return false;
+}
+
+bool Unicorn(int now, Setup &s)
+{
+   ClearSetup(s);
+   if(!InpUseUnicorn) return false;
+
+   int ls, le; double lo, hi;
+   int dir = FindMss(now, 60, ls, le, lo, hi);
+   if(dir == 0) return false;
+
+   double atr = AtrAt(now);
+   if(atr <= 0) return false;
+   double minGap = Scaled(atr, InpMinFvgATR, InpMinFvgBP, C[now]);
+   double spGap  = BpToPrice(InpSpreadFloorBP, C[now]) * InpFvgSpreadMult;
+   if(spGap > minGap) minGap = spGap;
+
+   double ftop, fbot;
+   if(!FindLegFvg(ls, le, dir, minGap, ftop, fbot)) return false;
+
+   double btop, bbot; int bat;
+   if(!OriginBlock(ls, le, dir, btop, bbot, bat)) return false;
+
+   // the breaker must already have been traded through to become one
+   bool broken = (dir > 0) ? (C[le] > btop) : (C[le] < bbot);
+   if(!broken) return false;
+
+   // overlap of breaker and FVG
+   double top = (btop < ftop) ? btop : ftop;
+   double bot = (bbot > fbot) ? bbot : fbot;
+   if(top <= bot) return false;                  // no overlap: not a unicorn
+
+   double entry = (top + bot) / 2.0;
+   if(dir > 0 && entry > C[now]) return false;
+   if(dir < 0 && entry < C[now]) return false;
+
+   double buf = Scaled(atr, InpStopBufferATR, InpStopBufferBP, C[now]);
+   s.isBuy   = (dir > 0);
+   s.isLimit = true;
+   s.entry   = entry;
+   s.stop    = s.isBuy ? bot - buf : top + buf;
+   if(s.isBuy && s.stop >= s.entry) return false;
+   if(!s.isBuy && s.stop <= s.entry) return false;
+
+   return Finish(s, now, InpUNI_TargetRR, InpUNI_RiskPct,
+                 InpUNI_BreakevenR, InpUNI_HoldMin, "Unicorn",
+                 StringFormat("breaker %.2f-%.2f overlaps FVG %.2f-%.2f",
+                              bbot, btop, fbot, ftop));
+}
+
+//====================================================================
+// Model 5: TJR
+//   Sweep a clear level and close back inside, then break structure,
+//   then buy the retrace to the ORIGIN of that break - the last
+//   opposing candle. Same raw material as ICT's 2022 model, but the
+//   entry sits at the order block instead of the midpoint of an FVG.
+//====================================================================
+bool Tjr(int now, Setup &s)
+{
+   ClearSetup(s);
+   if(!InpUseTJR) return false;
+
+   datetime today = NyDay(T[now]);
+   double pdh, pdl, ah, al;
+   bool hasPd   = DayLevels(now, today - 86400, pdh, pdl);
+   bool hasAsia = AsianRange(now, ah, al);
+   if(!hasPd && !hasAsia) return false;
+
+   double levels[4];
+   int    kinds[4];
+   int    n = 0;
+   if(hasPd)   { levels[n]=pdh; kinds[n]=+1; n++; levels[n]=pdl; kinds[n]=-1; n++; }
+   if(hasAsia) { levels[n]=ah;  kinds[n]=+1; n++; levels[n]=al;  kinds[n]=-1; n++; }
+
+   double atr = AtrAt(now);
+   if(atr <= 0) return false;
+   double buf = Scaled(atr, InpStopBufferATR, InpStopBufferBP, C[now]);
+
+   // 1. the sweep: wick through, close back inside. Confirmed on close only.
+   for(int back = 0; back <= 40 && now - back > 2; back++)
+   {
+      int r = now - back;
+      for(int i = 0; i < n; i++)
+      {
+         double lvl = levels[i];
+         int dir;
+         double extreme;
+         if(kinds[i] > 0 && H[r] > lvl && C[r] < lvl)      { dir = -1; extreme = H[r]; }
+         else if(kinds[i] < 0 && L[r] < lvl && C[r] > lvl) { dir = +1; extreme = L[r]; }
+         else continue;
+
+         // 2. structure break, after the sweep, in the fade direction
+         int ls, le; double lo, hi;
+         int mss = FindMss(now, 60, ls, le, lo, hi);
+         if(mss != dir || le < r) continue;
+
+         // 3. entry at the origin of the impulse
+         double btop, bbot; int bat;
+         if(!OriginBlock(ls, le, dir, btop, bbot, bat)) continue;
+         if(bat < r) continue;
+
+         double entry = (dir > 0) ? btop : bbot;
+         if(dir > 0 && entry > C[now]) continue;
+         if(dir < 0 && entry < C[now]) continue;
+
+         s.isBuy   = (dir > 0);
+         s.isLimit = true;
+         s.entry   = entry;
+         s.stop    = s.isBuy ? extreme - buf : extreme + buf;   // 4. beyond the sweep wick
+         if(s.isBuy && s.stop >= s.entry) continue;
+         if(!s.isBuy && s.stop <= s.entry) continue;
+
+         if(Finish(s, now, InpTJR_TargetRR, InpTJR_RiskPct,
+                   InpTJR_BreakevenR, InpTJR_HoldMin, "TJR",
+                   StringFormat("swept %.2f, closed back, origin OB %.2f-%.2f",
+                                lvl, bbot, btop)))
+            return true;
+      }
+   }
+   return false;
 }
 
 //====================================================================
@@ -773,7 +958,7 @@ void Place(Setup &s)
       g_open.risk    = MathAbs(entry - stop);
       g_open.target  = tp;
       g_open.beAtR   = s.beAtR;
-      g_open.holdBars= s.holdBars;
+      g_open.holdMin = s.holdMin;
       g_open.opened  = TimeCurrent();
       g_open.movedBE = false;
       g_hasOpen = true;
@@ -800,7 +985,7 @@ void ManageOpen()
       g_open.risk  = MathAbs(entry - sl);
       g_open.stop0 = sl;
       g_open.beAtR = 0;
-      g_open.holdBars = 0;
+      g_open.holdMin = 0;
       g_open.opened = (datetime)PositionGetInteger(POSITION_TIME);
       g_open.movedBE = false;
       g_hasOpen = true;
@@ -822,14 +1007,15 @@ void ManageOpen()
       }
    }
 
-   // time stop
-   if(g_open.holdBars > 0)
+   // time stop. Measured in MINUTES, not bars, so the same plan behaves
+   // identically on M5, M15 or M30 charts.
+   if(g_open.holdMin > 0)
    {
-      int held = (int)((TimeCurrent() - g_open.opened) / PeriodSeconds(PERIOD_CURRENT));
-      if(held >= g_open.holdBars)
+      int held = (int)((TimeCurrent() - g_open.opened) / 60);
+      if(held >= g_open.holdMin)
       {
-         Say(StringFormat("%s: hold limit %d bars reached, closing",
-                          g_open.model, g_open.holdBars));
+         Say(StringFormat("%s: hold limit %d min reached, closing",
+                          g_open.model, g_open.holdMin));
          trade.PositionClose(g_sym);
          g_hasOpen = false;
       }
@@ -853,11 +1039,13 @@ int OnInit()
    g_hasPend = false;
    g_dayStart = AccountInfoDouble(ACCOUNT_BALANCE);
 
-   PrintFormat("ICTGold on %s %s | TurtleSoup %s  JudasSwing %s  OTE %s",
+   PrintFormat("ICTGold on %s %s | Unicorn %s  Judas %s  Turtle %s  TJR %s  OTE %s",
                g_sym, EnumToString((ENUM_TIMEFRAMES)Period()),
-               InpUseTurtleSoup ? "on" : "off",
+               InpUseUnicorn    ? "on" : "off",
                InpUseJudasSwing ? "on" : "off",
-               InpUseOTE ? "on" : "off");
+               InpUseTurtleSoup ? "on" : "off",
+               InpUseTJR        ? "on" : "off",
+               InpUseOTE        ? "on" : "off");
    if(InpDryRun && !MQLInfoInteger(MQL_TESTER))
       Print("DRY RUN: signals are logged, no orders are sent.");
    if(MQLInfoInteger(MQL_TESTER) && InpDryRun)
@@ -898,9 +1086,12 @@ void OnTick()
    int now = LastClosed();
    if(now < InpAtrPeriod + 70) return;
 
+   // Evaluated in measured-expectancy order: the best model gets the bar.
    Setup s;
-   if(TurtleSoup(now, s) && s.ok) { Place(s); return; }
+   if(Unicorn(now, s)    && s.ok) { Place(s); return; }
    if(JudasSwing(now, s) && s.ok) { Place(s); return; }
+   if(TurtleSoup(now, s) && s.ok) { Place(s); return; }
+   if(Tjr(now, s)        && s.ok) { Place(s); return; }
    if(Ote(now, s)        && s.ok) { Place(s); return; }
 }
 

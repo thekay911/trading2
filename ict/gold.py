@@ -116,7 +116,11 @@ class GoldProfile:
     rollover_end: float = 20.0
 
     # --- 체결 비용 ----------------------------------------------------
-    spread: float = 0.25                  # 엑스네스 Standard 기준
+    spread: float = 0.25                  # 엑스네스 Standard 기준 (현재 가격대)
+    spread_bp: float = 0.55               # 가격 대비 스프레드. 과거 구간에 쓴다.
+    #: $0.25 는 금이 $4,600 일 때의 값이다. 2004년 금은 $384 였고 그때
+    #: 스프레드가 $0.25 였을 리 없다. 21년치를 돌릴 때 달러로 고정하면
+    #: 초반 구간이 통째로 걸러지거나 비용이 과대평가된다.
     max_spread_to_stop: float = 0.15      # 스프레드가 손절폭의 15% 넘으면 스킵
 
     def displacement(self, v: Volatility) -> float:
@@ -124,7 +128,7 @@ class GoldProfile:
 
     def min_fvg(self, v: Volatility) -> float:
         return max(v.scaled(self.min_fvg_atr, self.min_fvg_bp),
-                   self.spread * self.fvg_spread_multiple)
+                   self.spread_at(v.price) * self.fvg_spread_multiple)
 
     def equal_tolerance(self, v: Volatility) -> float:
         return v.scaled(self.equal_level_atr, self.equal_level_bp)
@@ -138,10 +142,20 @@ class GoldProfile:
         h = ny_clock(moment)
         return self.rollover_start <= h < self.rollover_end
 
-    def spread_ok(self, stop_distance: float) -> bool:
+    def spread_at(self, price: float) -> float:
+        """그 가격대의 스프레드. 달러 고정값과 bp 비례값 중 작은 쪽.
+
+        지금 가격대에서는 `spread` 가, 훨씬 싼 과거 구간에서는 bp 가 이긴다.
+        """
+        if self.spread_bp <= 0 or price <= 0:
+            return self.spread
+        return min(self.spread, bp_to_price(self.spread_bp, price))
+
+    def spread_ok(self, stop_distance: float, price: float = 0.0) -> bool:
         if self.max_spread_to_stop <= 0 or stop_distance <= 0:
             return True
-        return self.spread <= stop_distance * self.max_spread_to_stop
+        sp = self.spread_at(price) if price > 0 else self.spread
+        return sp <= stop_distance * self.max_spread_to_stop
 
     def with_(self, **kw) -> "GoldProfile":
         return replace(self, **kw)
@@ -151,7 +165,7 @@ class GoldProfile:
 STANDARD = GoldProfile()
 
 #: Raw / Zero 계좌 — 스프레드가 좁으니 더 작은 FVG 도 쓸 수 있다
-RAW = GoldProfile(spread=0.15, max_spread_to_stop=0.12)
+RAW = GoldProfile(spread=0.15, spread_bp=0.33, max_spread_to_stop=0.12)
 
 #: 보수적 — 변위와 FVG 기준을 올려 셋업 수를 줄인다
 STRICT = GoldProfile(displacement_atr=2.0, displacement_bp=12.0,
