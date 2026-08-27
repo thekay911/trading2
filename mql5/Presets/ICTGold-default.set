@@ -1,4 +1,4 @@
-; Gated: killzone + context + cooldown, 3 setups a day max
+; Exness GMT+2, M15 or M30 chart
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -40,7 +40,7 @@ InpMaxLots=1.00
 InpMaxRiskPctHard=3.0
 InpSpreadFloorBP=0.55
 InpMaxSpreadPrice=0.60
-InpLimitExpiryBars=24
+InpLimitExpiryMin=120
 InpSwingLeft=1
 InpSwingRight=1
 InpLookbackBars=600
@@ -49,7 +49,8 @@ InpRequireContext=true
 InpCooldownBars=12
 InpContextLookback=40
 InpMinRR=2.0
-InpServerGmtOffset=0
+InpServerGmtOffset=2
+InpAutoDetectOffset=true
 InpBlockRollover=true
 InpRolloverStart=17.0
 InpRolloverEnd=20.0

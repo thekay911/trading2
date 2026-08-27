@@ -297,9 +297,35 @@ class TestEaFileHealth(unittest.TestCase):
         self.assertIn("NO STOP LOSS", src)
         self.assertLessEqual(float(ea["InpMaxRiskPctHard"]), 3.0)
 
-    def test_server_offset_input_exists(self):
-        """테스터의 TimeGMT() 는 서버시간이라 보정이 없으면 세션이 밀린다."""
-        self.assertIn("InpServerGmtOffset", ea_inputs())
+    def test_server_offset_is_not_zero_by_default(self):
+        """0 으로 두면 킬존이 통째로 2~3시간 밀린다. 실제로 그렇게 돌아갔다."""
+        ea = ea_inputs()
+        self.assertIn("InpServerGmtOffset", ea)
+        self.assertNotEqual(float(ea["InpServerGmtOffset"]), 0.0)
+
+    def test_tester_refuses_a_zero_offset(self):
+        """말로 '2로 바꾸세요' 하는 건 강제가 아니다. 코드가 막아야 한다."""
+        src = EA.read_text()
+        self.assertIn("INIT_PARAMETERS_INCORRECT", src)
+        self.assertIn("InpAutoDetectOffset", src)
+
+    def test_limit_expiry_is_in_minutes(self):
+        """봉 수로 두면 M5 에서 2시간, H1 에서 24시간이 된다.
+        하루 묵은 지정가는 가격이 레벨을 뚫고 지나갈 때 체결되고 바로 손절된다."""
+        src = EA.read_text()
+        self.assertIn("InpLimitExpiryMin", ea_inputs())
+        self.assertNotIn("InpLimitExpiryBars", src)
+        self.assertIn("InpLimitExpiryMin * 60", src)
+
+    def test_limit_fills_inherit_their_plan(self):
+        """지정가로 들어간 포지션에도 보유한도가 붙어야 한다.
+        전에는 시장가 주문에만 붙어서, 지정가 모델은 시간 청산이 없었다."""
+        src = EA.read_text()
+        self.assertIn("g_pend.holdMin", src)
+        self.assertIn("g_open.holdMin = g_pend.holdMin", src)
+
+    def test_warns_on_an_unmeasured_timeframe(self):
+        self.assertIn("PERIOD_M15", EA.read_text())
 
 
 if __name__ == "__main__":

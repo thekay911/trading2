@@ -99,7 +99,7 @@ input double InpMaxLots         = 1.00;    // HARD cap on position size
 input double InpMaxRiskPctHard   = 3.0;    // refuse any order risking more than this
 input double InpSpreadFloorBP   = 0.55;    // assumed spread as bp of price, for the stop check
 input double InpMaxSpreadPrice  = 0.60;    // hard spread cap in price (dollars)
-input int    InpLimitExpiryBars = 24;      // cancel unfilled limit after N bars (2h)
+input int    InpLimitExpiryMin  = 120;     // cancel unfilled limit after N MINUTES
 input int    InpSwingLeft       = 1;       // fractal bars left
 input int    InpSwingRight      = 1;       // fractal bars right
 input int    InpLookbackBars    = 600;     // bars analysed each evaluation
@@ -112,7 +112,8 @@ input int    InpContextLookback = 40;      // bars used to judge the context ran
 input double InpMinRR           = 2.0;     // reject a setup whose target is nearer than this
 
 input group "=== Session (New York clock, DST handled) ==="
-input double InpServerGmtOffset = 0;       // server time - GMT, in hours (Exness: 2 or 3)
+input double InpServerGmtOffset = 2;       // server time - GMT, in hours (Exness: 2 or 3)
+input bool   InpAutoDetectOffset = true;   // live: read it from the terminal instead of trusting the input
 input bool   InpBlockRollover   = true;    // no trades NY 17:00-20:00 (gold rollover)
 input double InpRolloverStart   = 17.0;
 input double InpRolloverEnd     = 20.0;
@@ -183,6 +184,8 @@ struct Pending
    ulong    ticket;
    string   model;
    datetime placed;
+   double   beAtR;
+   int      holdMin;
 };
 Pending g_pend;
 bool    g_hasPend = false;
@@ -242,9 +245,11 @@ bool IsUsDst(datetime gmt)
    return (t.hour < 6);                  // 2am EDT = 06:00 GMT
 }
 
+double g_gmtOffset = 0;      // resolved once in OnInit
+
 datetime ToGmt(datetime server)
 {
-   return server - (datetime)(int)MathRound(InpServerGmtOffset * 3600.0);
+   return server - (datetime)(int)MathRound(g_gmtOffset * 3600.0);
 }
 
 datetime ToNy(datetime server)
@@ -1109,7 +1114,11 @@ void Place(Setup &s)
                      : trade.Sell(lots, g_sym, 0, stop, tp, InpComment);
    else
    {
-      datetime exp = TimeCurrent() + InpLimitExpiryBars * PeriodSeconds(PERIOD_CURRENT);
+      // In MINUTES, not bars. As bars this was 2h on M5 but 24h on H1,
+      // so on an H1 chart the order sat all day and filled hours later
+      // while price was falling straight through the level - it filled
+      // and hit the stop seconds afterwards.
+      datetime exp = TimeCurrent() + InpLimitExpiryMin * 60;
       sent = s.isBuy
              ? trade.BuyLimit (lots, entry, g_sym, stop, tp, ORDER_TIME_SPECIFIED, exp, InpComment)
              : trade.SellLimit(lots, entry, g_sym, stop, tp, ORDER_TIME_SPECIFIED, exp, InpComment);
@@ -1141,9 +1150,11 @@ void Place(Setup &s)
    MarkFired(s.model);
    if(s.isLimit)
    {
-      g_pend.ticket = trade.ResultOrder();
-      g_pend.model  = s.model;
-      g_pend.placed = TimeCurrent();
+      g_pend.ticket  = trade.ResultOrder();
+      g_pend.model   = s.model;
+      g_pend.placed  = TimeCurrent();
+      g_pend.beAtR   = s.beAtR;
+      g_pend.holdMin = s.holdMin;
       g_hasPend = true;
    }
    else
@@ -1176,15 +1187,29 @@ void ManageOpen()
    double px    = isBuy ? SymbolInfoDouble(g_sym, SYMBOL_BID)
                         : SymbolInfoDouble(g_sym, SYMBOL_ASK);
 
-   if(!g_hasOpen)                                  // recovered after restart
+   if(!g_hasOpen)
    {
-      g_open.entry = entry;
-      g_open.risk  = MathAbs(entry - sl);
-      g_open.stop0 = sl;
-      g_open.beAtR = 0;
-      g_open.holdMin = 0;
-      g_open.opened = (datetime)PositionGetInteger(POSITION_TIME);
+      // A pending order just became a position. Carry its plan over -
+      // otherwise limit-entry models (Unicorn, TurtleSoup) run with no
+      // time stop at all, because only market orders used to set this.
+      g_open.entry   = entry;
+      g_open.risk    = MathAbs(entry - sl);
+      g_open.stop0   = sl;
+      g_open.opened  = (datetime)PositionGetInteger(POSITION_TIME);
       g_open.movedBE = false;
+      if(g_hasPend)
+      {
+         g_open.model   = g_pend.model;
+         g_open.beAtR   = g_pend.beAtR;
+         g_open.holdMin = g_pend.holdMin;
+         g_hasPend = false;
+      }
+      else
+      {
+         g_open.model   = "recovered";
+         g_open.beAtR   = 0;
+         g_open.holdMin = 0;
+      }
       g_hasOpen = true;
    }
 
@@ -1227,6 +1252,45 @@ int OnInit()
    g_sym    = _Symbol;
    g_point  = SymbolInfoDouble(g_sym, SYMBOL_POINT);
    g_digits = (int)SymbolInfoInteger(g_sym, SYMBOL_DIGITS);
+
+   // Resolve the server-to-GMT offset BEFORE anything reads the clock.
+   // Every killzone decision hangs off this. Getting it wrong by two
+   // hours makes the EA trade the wrong sessions while reporting that
+   // it traded the right ones.
+   g_gmtOffset = InpServerGmtOffset;
+   if(InpAutoDetectOffset && !MQLInfoInteger(MQL_TESTER))
+   {
+      double detected = (double)(TimeCurrent() - TimeGMT()) / 3600.0;
+      detected = MathRound(detected * 2.0) / 2.0;          // half-hour steps
+      if(MathAbs(detected) <= 14.0)
+      {
+         if(MathAbs(detected - InpServerGmtOffset) > 0.25)
+            PrintFormat("Server offset: input said %+.1f, terminal says %+.1f. Using %+.1f.",
+                        InpServerGmtOffset, detected, detected);
+         g_gmtOffset = detected;
+      }
+   }
+   else if(MQLInfoInteger(MQL_TESTER))
+   {
+      // The tester makes TimeGMT() equal server time, so it cannot be
+      // detected here. Refuse to run on a value that is almost certainly
+      // wrong rather than silently trade the wrong sessions.
+      if(MathAbs(InpServerGmtOffset) < 0.25)
+      {
+         Print("STOP: InpServerGmtOffset is 0. Almost no MT5 broker runs on GMT.");
+         Print("      Exness and most others are +2 (winter) or +3 (summer).");
+         Print("      Set it, or every killzone will be off by hours.");
+         return INIT_PARAMETERS_INCORRECT;
+      }
+   }
+   PrintFormat("Server clock = GMT%+.1f", g_gmtOffset);
+
+   // The plans were measured on M15 and M30. They are not measured
+   // anywhere else - say so instead of pretending.
+   ENUM_TIMEFRAMES tf = (ENUM_TIMEFRAMES)Period();
+   if(tf != PERIOD_M15 && tf != PERIOD_M30)
+      PrintFormat("WARNING: this chart is %s. The plans were measured on M15 and M30 only.",
+                  EnumToString(tf));
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpDeviation);
