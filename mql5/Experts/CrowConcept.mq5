@@ -10,8 +10,17 @@
 //|    4. Order      limit at the zone edge (market if price is in)   |
 //|    5. Manage     2R -> breakeven, 3R -> partial, SL never back    |
 //|                                                                  |
+//|  THIS SINGLE FILE IS THE WHOLE EA. Nothing else is required -    |
+//|  no includes, no .set file, no Python. Copy it into              |
+//|      <MT5 data folder>/MQL5/Experts/                             |
+//|  compile with F7, drag it onto a XAUUSD chart. Done.             |
+//|                                                                  |
+//|  Defaults are already the intended setup (Exness, XAUUSD):       |
+//|      M15 > M5 > M1 | risk 2% | stop 20 pips | target 1:3         |
+//|      1 pip = $0.10, so 20 pips = $2.00 = $2 risk on 0.01 lot     |
+//|                                                                  |
 //|  Comments are in English so the file compiles cleanly regardless  |
-//|  of the editor's encoding. Setup guide: docs/MT5_SETUP.md         |
+//|  of the editor's encoding.                                       |
 //+------------------------------------------------------------------+
 #property copyright "crowcode"
 #property version   "1.00"
@@ -30,9 +39,9 @@ enum ENUM_STOP_MODE
 // Inputs
 //====================================================================
 input group "=== Timeframes (top-down) ==="
-input ENUM_TIMEFRAMES  InpHTF              = PERIOD_H4;   // HTF: direction
-input ENUM_TIMEFRAMES  InpMTF              = PERIOD_H1;   // MTF: zone (POI)
-input ENUM_TIMEFRAMES  InpLTF              = PERIOD_M15;  // LTF: trigger
+input ENUM_TIMEFRAMES  InpHTF              = PERIOD_M15;  // HTF: direction
+input ENUM_TIMEFRAMES  InpMTF              = PERIOD_M5;   // MTF: zone (POI)
+input ENUM_TIMEFRAMES  InpLTF              = PERIOD_M1;   // LTF: trigger
 
 input group "=== Structure ==="
 input int              InpSwingLeft        = 2;           // fractal bars left
@@ -49,14 +58,14 @@ input int              InpSweepLookback    = 60;          // LTF bars to look ba
 input bool             InpUseOrderBlocks   = true;        // zone type: order block
 input bool             InpUseFVG           = true;        // zone type: fair value gap
 input bool             InpMarketIfAtZone   = true;        // enter at market inside zone
-input double           InpSlBufferATR      = 0.35;        // SL buffer (LTF ATR)
+input double           InpSlBufferATR      = 0.25;        // SL buffer (LTF ATR)
 input double           InpMaxEntryDistATR  = 3.0;         // skip zones further than this
-input int              InpLimitExpiryBars  = 32;          // pending expiry in LTF bars
+input int              InpLimitExpiryBars  = 120;         // pending expiry in LTF bars
 
 input group "=== XAUUSD stop guards (price = gold dollars) ==="
-input double           InpMinSLPrice       = 2.50;        // reject stops tighter than this
-input double           InpMaxSLPrice       = 25.00;       // reject stops wider than this
-input double           InpMaxSpreadRatio   = 0.08;        // max spread / stop distance
+input double           InpMinSLPrice       = 2.00;        // reject stops tighter than this (20 pips)
+input double           InpMaxSLPrice       = 2.50;        // reject stops wider than this (25 pips)
+input double           InpMaxSpreadRatio   = 0.18;        // max spread / stop distance
 input ENUM_STOP_MODE   InpStopMode         = STOP_FIXED;  // stop sizing rule
 input double           InpFixedSLPrice     = 2.00;        // STOP_FIXED: stop in price ($2.00 = 20 pips)
 
@@ -67,7 +76,7 @@ input double           InpTargetRR         = 3.0;         // fixed target when n
 input double           InpBreakevenAtR     = 1.5;         // move SL to entry at this R
 input double           InpPartialAtR       = 2.0;         // partial close at this R (must be < target)
 input double           InpPartialFraction  = 0.5;         // fraction closed
-input int              InpMaxTradesPerDay  = 3;           // hard cap
+input int              InpMaxTradesPerDay  = 6;           // hard cap
 input int              InpMaxConsecLosses  = 2;           // stop the day after N losses
 input double           InpMaxDailyLossPct  = 6.0;         // stop the day at this drawdown
 input int              InpBeBufferPoints   = 10;          // breakeven buffer (points)

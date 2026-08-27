@@ -315,3 +315,68 @@ class TestStopClamping(unittest.TestCase):
         cfg = preset("intraday").with_sl_pips(20, 25, 1.0).with_(sl_mode="clamp")
         sigs, _ = self._signals(cfg)
         self.assertTrue(any("확대" in r for s in sigs for r in s.reasons))
+
+
+class TestEaDefaultsMatchThePreset(unittest.TestCase):
+    """EA 는 파일 하나로 끝나야 한다 — .set 없이도 기본값이 곧 운용 설정이다.
+
+    기본값이 프리셋과 어긋나면 .set 을 안 불러온 사람은 다른 시스템을
+    돌리게 된다. 그래서 기계적으로 대조한다.
+    """
+
+    TF = {"M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15",
+          "M30": "PERIOD_M30", "H1": "PERIOD_H1", "H4": "PERIOD_H4", "D1": "PERIOD_D1"}
+
+    @classmethod
+    def setUpClass(cls):
+        with open(MQL, encoding="utf-8") as fh:
+            src = fh.read()
+        cls.defaults = dict(re.findall(r"^input\s+\S+\s+(\w+)\s*=\s*([^;]+);", src, re.M))
+
+    def _val(self, name):
+        return self.defaults[name].strip()
+
+    def test_timeframes(self):
+        cfg = preset("scalp")
+        self.assertEqual(self._val("InpHTF"), self.TF[cfg.htf])
+        self.assertEqual(self._val("InpMTF"), self.TF[cfg.mtf])
+        self.assertEqual(self._val("InpLTF"), self.TF[cfg.ltf])
+
+    def test_risk_and_targets(self):
+        cfg = preset("scalp")
+        for name, want in (("InpRiskPercent", cfg.risk_pct),
+                           ("InpMinRR", cfg.min_rr),
+                           ("InpTargetRR", cfg.target_rr),
+                           ("InpBreakevenAtR", cfg.breakeven_at_r),
+                           ("InpPartialAtR", cfg.partial_at_r),
+                           ("InpPartialFraction", cfg.partial_fraction)):
+            self.assertAlmostEqual(float(self._val(name)), want, msg=name)
+
+    def test_stop_guards(self):
+        cfg = preset("scalp")
+        self.assertAlmostEqual(float(self._val("InpMinSLPrice")), cfg.min_sl_price)
+        self.assertAlmostEqual(float(self._val("InpMaxSLPrice")), cfg.max_sl_price)
+        self.assertAlmostEqual(float(self._val("InpFixedSLPrice")), cfg.min_sl_price)
+        self.assertAlmostEqual(float(self._val("InpMaxSpreadRatio")), cfg.max_spread_ratio)
+
+    def test_daily_limits(self):
+        cfg = preset("scalp")
+        self.assertEqual(int(self._val("InpMaxTradesPerDay")), cfg.max_trades_per_day)
+        self.assertEqual(int(self._val("InpMaxConsecLosses")), cfg.max_consecutive_losses)
+        self.assertAlmostEqual(float(self._val("InpMaxDailyLossPct")), cfg.max_daily_loss_pct)
+        self.assertAlmostEqual(float(self._val("InpHardStopPct")), cfg.hard_stop_loss_pct)
+
+    def test_stop_mode_matches(self):
+        want = {"filter": "STOP_STRUCTURE", "clamp": "STOP_CLAMP", "fixed": "STOP_FIXED"}
+        self.assertEqual(self._val("InpStopMode"), want[preset("scalp").sl_mode])
+
+    def test_sessions(self):
+        cfg = preset("scalp")
+        self.assertAlmostEqual(float(self._val("InpSession1Start")), cfg.sessions[0].start_hour)
+        self.assertAlmostEqual(float(self._val("InpSession2End")), cfg.sessions[1].end_hour)
+
+    def test_ea_is_self_contained(self):
+        """CTrade 외의 include 가 있으면 파일 하나로 끝나지 않는다."""
+        with open(MQL, encoding="utf-8") as fh:
+            includes = re.findall(r"^#include\s+<([^>]+)>", fh.read(), re.M)
+        self.assertEqual(includes, ["Trade/Trade.mqh"], f"추가 include: {includes}")
