@@ -2,22 +2,34 @@
 //|                                                     ICTGold.mq5  |
 //|   ICT models for XAUUSD, calibrated on real gold data.           |
 //|                                                                  |
-//|   Plans measured on real XAUUSD M30, 2004-06 to 2026-01:         |
-//|   248,912 bars, 8,241 setups, 6,185 trades. Each model has its    |
-//|   own target and hold because they run on different clocks.      |
+//|   Measured on real XAUUSD 2004-06 to 2026-01, on TWO timeframes  |
+//|   independently: M30 (248,912 bars) and M15 (494,235 bars).      |
+//|   A model is on by default only if it survived BOTH, and stayed  |
+//|   positive across four-year eras.                                |
 //|                                                                  |
-//|     Unicorn      4.0R    8h hold   risk 2%   (+0.317R, 1224 tr)  |
-//|     JudasSwing   4.0R   24h hold   risk 1%   (+0.435R,  212 tr)  |
-//|     TurtleSoup   4.0R    8h hold   risk 2%   (+0.179R, 3609 tr)  |
-//|     OTE          3.0R   24h hold   risk 1%   (+0.043R, 1223 tr)  |
-//|     TJR          3.0R   24h hold   risk 1%   (+0.049R,  540 tr)  |
+//|   ON                                                             |
+//|     Unicorn      4.0R   8h hold   risk 2%                        |
+//|                  positive in all six eras, best in the latest    |
+//|     TurtleSoup   4.0R   8h hold   risk 2%                        |
+//|                  positive in five of six, largest sample         |
+//|                                                                  |
+//|   OFF - measured and rejected, flip them on to see for yourself  |
+//|     TJR          edge decaying: +.33 +.13 +.12 -.02 -.02 -.05    |
+//|     OTE          M30 says +41.8R, M15 says -52.2R                |
+//|     JudasSwing   best on M30 (212 trades), negative on M15 (416) |
+//|     ICT2022      hovers at zero, Unicorn dominates it            |
+//|     SilverBullet best win rate (47%) but total R is ~0           |
+//|                                                                  |
+//|   Result with the two default models:                            |
+//|     M30  +829.9R over 4,260 trades, max DD 46.8R                 |
+//|     M15  +704.2R over 4,275 trades, max DD 45.0R                 |
 //|                                                                  |
 //|   No breakeven stops. Measured on all six models: moving the     |
 //|   stop to entry lowered expectancy AND raised drawdown. Gold     |
 //|   retraces deep into the entry before it runs.                   |
 //|                                                                  |
-//|   Buy +494.8R vs sell +489.2R over 21 years: symmetric, so       |
-//|   this is not a ride on gold's secular uptrend.                  |
+//|   Buy +494.8R vs sell +489.2R: symmetric, so this is not a       |
+//|   ride on gold's secular uptrend.                                |
 //|                                                                  |
 //|   Everything is measured relative to ATR or basis points, never  |
 //|   in fixed dollars: gold was 1300 in 2018 and 4600 in 2026.      |
@@ -33,11 +45,11 @@
 // Inputs
 //====================================================================
 input group "=== Models (each has its own plan) ==="
-input bool   InpUseUnicorn      = true;    // Unicorn: breaker overlapping an FVG
-input bool   InpUseJudasSwing   = true;    // JudasSwing: session sweep then reverse
-input bool   InpUseTurtleSoup   = true;    // TurtleSoup: false break of a level
-input bool   InpUseOTE          = true;    // OTE: 62-79% of a displacement leg
-input bool   InpUseTJR          = true;    // TJR: sweep -> displacement -> origin OB
+input bool   InpUseUnicorn      = true;    // ON: only model positive in all six eras
+input bool   InpUseJudasSwing   = false;   // OFF: positive on M30, negative on M15
+input bool   InpUseTurtleSoup   = true;    // ON: positive in five of six eras
+input bool   InpUseOTE          = false;   // OFF: sign flips between timeframes
+input bool   InpUseTJR          = false;   // OFF: edge decays in the last three eras
 
 input group "=== Unicorn plan (best measured edge) ==="
 input double InpUNI_TargetRR    = 4.0;     // target in R

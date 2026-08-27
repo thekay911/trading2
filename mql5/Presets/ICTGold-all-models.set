@@ -1,10 +1,10 @@
-; Unicorn + JudasSwing only - the two strongest measured edges
+; Every model on, including the four that failed measurement
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=true
-InpUseTurtleSoup=false
-InpUseOTE=false
-InpUseTJR=false
+InpUseTurtleSoup=true
+InpUseOTE=true
+InpUseTJR=true
 InpUNI_TargetRR=4.0
 InpUNI_HoldMin=480
 InpUNI_BreakevenR=0.0

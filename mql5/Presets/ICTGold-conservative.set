@@ -1,10 +1,10 @@
-; All models at 1% risk, tighter daily caps
+; Both models at 1% risk, tighter daily caps
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
-InpUseJudasSwing=true
+InpUseJudasSwing=false
 InpUseTurtleSoup=true
-InpUseOTE=true
-InpUseTJR=true
+InpUseOTE=false
+InpUseTJR=false
 InpUNI_TargetRR=4.0
 InpUNI_HoldMin=480
 InpUNI_BreakevenR=0.0

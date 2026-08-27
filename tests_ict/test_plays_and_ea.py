@@ -71,8 +71,14 @@ class TestPlays(unittest.TestCase):
     def test_active_plays_carry_their_measurement(self):
         for name in ACTIVE:
             p = PLAYS[name]
-            self.assertGreater(p.trades, 100, f"{name}: 표본이 너무 얇다")
-            self.assertGreater(p.expectancy, 0.0, f"{name}: 기대값이 음수인데 켜져 있다")
+            self.assertGreater(p.trades, 1000,
+                               f"{name}: 표본 {p.trades}거래로는 못 켠다")
+            self.assertGreater(p.expectancy, 0.05,
+                               f"{name}: 기대값 {p.expectancy}로는 못 켠다")
+
+    def test_only_thoroughly_measured_models_are_on(self):
+        """켜는 기준: 두 시간대 + 4년 구간 전부를 통과. 지금은 둘뿐이다."""
+        self.assertEqual(set(ACTIVE), {"Unicorn", "TurtleSoup"})
 
     def test_disabled_plays_say_why(self):
         for name, p in PLAYS.items():
