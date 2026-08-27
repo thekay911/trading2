@@ -22,6 +22,8 @@ from ict.engine import Market
 from ict.gold import GoldProfile
 from ict.models import Config, Setup
 from ict.plays import ACTIVE
+from ict import context as ctxmod
+from ict import quality as qual
 from ict.ranges import leg_range
 from ict.structure import BEAR, BULL, Dir
 from ict.timeops import (
@@ -410,7 +412,8 @@ MODELS: dict[str, Callable[..., Setup | None]] = {
 
 
 def scan(m: Market, cfg: Config = Config(), models: Sequence[str] | None = None,
-         start: int = 300, cooldown: int = 12) -> list[Setup]:
+         start: int = 300, cooldown: int = 12,
+         select: bool = True, per_day: int = qual.PER_DAY) -> list[Setup]:
     """전 구간 훑기. 모델별로 `cooldown` 봉 안의 중복은 버린다.
 
     models 를 안 주면 `ict.plays.ACTIVE` (실측에서 살아남은 모델) 만 돈다.
@@ -428,4 +431,15 @@ def scan(m: Market, cfg: Config = Config(), models: Sequence[str] | None = None,
                 out.append(s)
                 last[name] = i
     out.sort(key=lambda s: s.index)
-    return out
+    if not select:
+        return out
+
+    # ICT Ep.2: 참조점을 보기 전에 지금이 어떤 상태인지부터 정한다.
+    # 확장 중에 들어가면 이미 간 걸 쫓는 것이다. 그 다음 하루 상한.
+    scored = []
+    for s in out:
+        c, rng = ctxmod.context(m.candles, s.index, m.atr_at(s.index))
+        j = qual.judge(s, c, rng)
+        if j is not None:
+            scored.append(j)
+    return qual.best_per_day(scored, per_day)

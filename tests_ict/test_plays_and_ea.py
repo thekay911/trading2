@@ -261,6 +261,42 @@ class TestEaFileHealth(unittest.TestCase):
         self.assertIn("InpMaxSpreadPrice", src)
         self.assertNotIn("InpMaxSpreadPoints", src)
 
+    def test_over_trading_gates_exist(self):
+        """이게 없으면 EA 가 모델보다 28배 자주 주문한다. 실제로 그랬다."""
+        ea = ea_inputs()
+        for key in ("InpRequireKillzone", "InpRequireContext",
+                    "InpCooldownBars", "InpMaxTradesPerDay", "InpHardCapPerDay"):
+            self.assertIn(key, ea, key)
+        self.assertEqual(ea["InpRequireKillzone"], "true")
+        self.assertEqual(ea["InpRequireContext"], "true")
+        self.assertGreater(int(ea["InpCooldownBars"]), 0)
+
+    def test_daily_cap_is_a_handful_not_a_flood(self):
+        ea = ea_inputs()
+        self.assertLessEqual(int(ea["InpMaxTradesPerDay"]), 3)
+        self.assertLessEqual(int(ea["InpHardCapPerDay"]), 10)
+
+    def test_a_raid_is_only_counted_once(self):
+        """습격은 그 레벨이 처음 뚫린 봉이다. 뒤따르는 봉마다 재진입하면 안 된다."""
+        self.assertIn("FirstBreak", EA.read_text())
+
+    def test_turtlesoup_waits_for_the_retest(self):
+        """레벨로 되돌아올 때 지정가로 잡는다. 시장가로 쫓으면 다른 전략이다."""
+        src = EA.read_text()
+        i = src.index("bool TurtleSoup")
+        body = src[i:src.index("//====", i + 10)]
+        self.assertIn("s.isLimit = true", body)
+        self.assertNotIn("s.isLimit = false", body)
+
+    def test_hard_money_guards_exist(self):
+        """손절이 안 걸린 포지션 하나가 계좌를 가져간다."""
+        ea, src = ea_inputs(), EA.read_text()
+        for key in ("InpMinStopPrice", "InpMaxLots", "InpMaxRiskPctHard"):
+            self.assertIn(key, ea, key)
+        self.assertIn("SYMBOL_TRADE_STOPS_LEVEL", src)
+        self.assertIn("NO STOP LOSS", src)
+        self.assertLessEqual(float(ea["InpMaxRiskPctHard"]), 3.0)
+
     def test_server_offset_input_exists(self):
         """테스터의 TimeGMT() 는 서버시간이라 보정이 없으면 세션이 밀린다."""
         self.assertIn("InpServerGmtOffset", ea_inputs())

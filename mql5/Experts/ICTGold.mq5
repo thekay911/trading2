@@ -94,12 +94,22 @@ input double InpMaxEntryDistATR = 3.0;     // skip limits further than this from
 
 input group "=== Execution guards ==="
 input double InpMaxSpreadToStop = 0.15;    // skip if spread > this fraction of the stop
+input double InpMinStopPrice    = 1.00;    // HARD floor on stop distance, in dollars
+input double InpMaxLots         = 1.00;    // HARD cap on position size
+input double InpMaxRiskPctHard   = 3.0;    // refuse any order risking more than this
 input double InpSpreadFloorBP   = 0.55;    // assumed spread as bp of price, for the stop check
 input double InpMaxSpreadPrice  = 0.60;    // hard spread cap in price (dollars)
 input int    InpLimitExpiryBars = 24;      // cancel unfilled limit after N bars (2h)
 input int    InpSwingLeft       = 1;       // fractal bars left
 input int    InpSwingRight      = 1;       // fractal bars right
 input int    InpLookbackBars    = 600;     // bars analysed each evaluation
+
+input group "=== Setup quality (this is what stops over-trading) ==="
+input bool   InpRequireKillzone = true;    // only London / NY AM / Silver Bullet
+input bool   InpRequireContext  = true;    // skip Expansion: never chase a move already gone
+input int    InpCooldownBars    = 12;      // bars before the same model may fire again
+input int    InpContextLookback = 40;      // bars used to judge the context range
+input double InpMinRR           = 2.0;     // reject a setup whose target is nearer than this
 
 input group "=== Session (New York clock, DST handled) ==="
 input double InpServerGmtOffset = 0;       // server time - GMT, in hours (Exness: 2 or 3)
@@ -110,7 +120,8 @@ input bool   InpBlockFridayLate = true;    // no new entries late friday
 input double InpFridayCutoffNY  = 15.0;
 
 input group "=== Daily circuit breaker ==="
-input int    InpMaxTradesPerDay = 6;
+input int    InpMaxTradesPerDay = 3;      // good setups only - 2 or 3 a day is plenty
+input int    InpHardCapPerDay   = 10;     // never more than this, whatever happens
 input int    InpMaxConsecLosses = 3;
 input double InpMaxDailyLossPct = 6.0;     // stop the day at this drawdown
 input double InpHardStopPct     = 10.0;    // locks trading until reviewed
@@ -134,6 +145,13 @@ string    g_sym;
 double    g_point;
 int       g_digits;
 datetime  g_lastBar   = 0;
+
+// per-model cooldown: the bar index each model last fired on.
+// Without this a TurtleSoup pattern stays valid for many bars in a row
+// and the EA re-fires on every one of them. That alone put the first
+// version at 24 orders a day against the model's 0.8.
+datetime  g_lastFire[8];
+string    g_modelName[8] = {"Unicorn","JudasSwing","TurtleSoup","TJR","OTE","","",""};
 
 // per-day state
 datetime  g_day       = 0;
@@ -431,6 +449,75 @@ bool AsianRange(int now, double &hi, double &lo)
    return any && (hi > lo);
 }
 
+
+//====================================================================
+// Killzones, in New York time. Measured over 21 years of XAUUSD:
+// 59.4% of daily highs and lows are made inside these windows.
+//====================================================================
+bool InKillzone(datetime server)
+{
+   double h = NyHour(server);
+   if(h >= 2.0  && h < 5.0)  return true;    // London
+   if(h >= 7.0  && h < 10.0) return true;    // New York AM
+   if(h >= 10.0 && h < 11.0) return true;    // Silver Bullet AM
+   return false;
+}
+
+//====================================================================
+// ICT Mentorship 2022 Ep.2 - Elements To A Trade Setup.
+// Decide WHAT STATE price is in before looking at any reference point.
+//
+//   Consolidation  range is tight - orders are still building
+//   Expansion      price is making new extremes right now - already gone
+//   Reversal       an extreme was swept and price closed back through
+//   Retracement    coming back into the range that was just made
+//
+// Only Retracement and Reversal can frame an entry. Measured on 21
+// years: Reversal +0.429R, Retracement +0.169R, Expansion +0.129R.
+// Entering during Expansion is chasing.
+//
+// Returns 0 = Consolidation, 1 = Expansion, 2 = Reversal, 3 = Retracement
+//====================================================================
+int MarketContext(int now, double &rngHigh, double &rngLow)
+{
+   int lo = now - InpContextLookback;
+   if(lo < 0) lo = 0;
+   double hi = H[lo], low = L[lo];
+   for(int k = lo; k <= now; k++)
+   {
+      if(H[k] > hi)  hi = H[k];
+      if(L[k] < low) low = L[k];
+   }
+   rngHigh = hi; rngLow = low;
+
+   double atr = AtrAt(now);
+   double size = hi - low;
+   if(atr <= 0 || size <= 0)    return 0;
+   if(size < atr * 3.0)         return 0;            // Consolidation
+
+   // a new extreme in the last three bars means we are still expanding
+   int r0 = now - 2; if(r0 < 0) r0 = 0;
+   double rh = H[r0], rl = L[r0];
+   for(int k = r0; k <= now; k++)
+   {
+      if(H[k] > rh) rh = H[k];
+      if(L[k] < rl) rl = L[k];
+   }
+   if(rh >= hi - 1e-9 || rl <= low + 1e-9) return 1; // Expansion
+
+   double eq = (hi + low) / 2.0;
+   int t0 = now - 10; if(t0 < 0) t0 = 0;
+   bool tookHigh = false, tookLow = false;
+   for(int k = t0; k <= now; k++)
+   {
+      if(H[k] >= hi - 1e-9)  tookHigh = true;
+      if(L[k] <= low + 1e-9) tookLow  = true;
+   }
+   if(tookHigh && C[now] < eq) return 2;             // Reversal
+   if(tookLow  && C[now] > eq) return 2;
+   return 3;                                          // Retracement
+}
+
 //====================================================================
 // Setup container
 //====================================================================
@@ -476,6 +563,7 @@ bool Finish(Setup &s, int now, double targetRR, double riskPct,
    if(atr <= 0) return false;
    if(MathAbs(s.entry - C[now]) > atr * InpMaxEntryDistATR) return false;
 
+   if(targetRR < InpMinRR) return false;
    s.target   = s.isBuy ? s.entry + risk * targetRR
                         : s.entry - risk * targetRR;
    s.model    = model;
@@ -484,6 +572,21 @@ bool Finish(Setup &s, int now, double targetRR, double riskPct,
    s.holdMin  = holdMin;
    s.why      = why;
    s.ok       = true;
+   return true;
+}
+
+//--- Was bar `r` the FIRST bar to take this level out?
+//    A raid happens once. Without this the EA re-detects the same
+//    sweep on every one of the next ten bars and fires again each
+//    time - which is most of why it traded 28x more than the model.
+bool FirstBreak(int r, double lvl, bool above, int scan)
+{
+   int from = r - scan; if(from < 1) from = 1;
+   for(int k = from; k < r; k++)
+   {
+      if(above && H[k] > lvl) return false;
+      if(!above && L[k] < lvl) return false;
+   }
    return true;
 }
 
@@ -523,11 +626,17 @@ bool TurtleSoup(int now, Setup &s)
          double lvl = levels[i];
          if(kinds[i] > 0)
          {
-            // swept above and closed back below -> sell
-            if(H[r] > lvl && C[r] < lvl && C[now] < lvl)
+            // swept above and closed back below -> sell.
+            // Enter with a LIMIT at the level itself and wait for the
+            // retest. Entering at market here was the single worst bug
+            // in the first version: it turned a patient retest model
+            // into a chase, and it filled every setup instead of the
+            // ~80% the model actually takes.
+            if(H[r] > lvl && C[r] < lvl && C[now] < lvl
+               && FirstBreak(r, lvl, true, 60))
             {
-               s.isBuy = false; s.isLimit = false;
-               s.entry = C[now];
+               s.isBuy = false; s.isLimit = true;
+               s.entry = lvl;
                s.stop  = H[r] + buf;
                if(s.stop <= s.entry) continue;
                if(Finish(s, now, InpTS_TargetRR, InpTS_RiskPct,
@@ -538,10 +647,11 @@ bool TurtleSoup(int now, Setup &s)
          }
          else
          {
-            if(L[r] < lvl && C[r] > lvl && C[now] > lvl)
+            if(L[r] < lvl && C[r] > lvl && C[now] > lvl
+               && FirstBreak(r, lvl, false, 60))
             {
-               s.isBuy = true; s.isLimit = false;
-               s.entry = C[now];
+               s.isBuy = true; s.isLimit = true;
+               s.entry = lvl;
                s.stop  = L[r] - buf;
                if(s.stop >= s.entry) continue;
                if(Finish(s, now, InpTS_TargetRR, InpTS_RiskPct,
@@ -836,9 +946,30 @@ bool Tjr(int now, Setup &s)
 //====================================================================
 // Risk sizing
 //====================================================================
+//--- Broker's minimum distance for SL/TP, in price.
+double StopsLevelPrice()
+{
+   long lvl = SymbolInfoInteger(g_sym, SYMBOL_TRADE_STOPS_LEVEL);
+   double frz = (double)SymbolInfoInteger(g_sym, SYMBOL_TRADE_FREEZE_LEVEL);
+   double d = (double)((lvl > frz) ? lvl : frz) * g_point;
+   return d;
+}
+
 double LotFor(double riskPct, double stopDistance)
 {
    if(stopDistance <= 0) return 0.0;
+
+   // A stop the broker will not accept is worse than no trade: the order
+   // is rejected, or on some brokers the position opens UNPROTECTED and
+   // one move takes the account. Refuse anything near that boundary.
+   double need = StopsLevelPrice() * 1.5;
+   if(need < InpMinStopPrice) need = InpMinStopPrice;
+   if(stopDistance < need)
+   {
+      Say(StringFormat("skip: stop %.2f below the safe minimum %.2f",
+                       stopDistance, need));
+      return 0.0;
+   }
    double bal  = AccountInfoDouble(ACCOUNT_BALANCE);
    double cash = bal * riskPct / 100.0;
 
@@ -869,7 +1000,24 @@ double LotFor(double riskPct, double stopDistance)
       lots = minL;
    }
    if(lots > maxL) lots = maxL;
-   return NormalizeDouble(lots, 2);
+   if(InpMaxLots > 0 && lots > InpMaxLots)
+   {
+      Say(StringFormat("size capped: %.2f -> %.2f lots", lots, InpMaxLots));
+      lots = InpMaxLots;
+   }
+   lots = NormalizeDouble(lots, 2);
+
+   // Final sanity check on money, not on lots. If the arithmetic above
+   // went wrong anywhere, this is the line that stops the account
+   // from being handed to a single trade.
+   double atRisk = lots * lossPerLot;
+   if(bal > 0 && 100.0 * atRisk / bal > InpMaxRiskPctHard)
+   {
+      Say(StringFormat("REFUSED: %.2f lots would risk %.1f%% (cap %.1f%%)",
+                       lots, 100.0 * atRisk / bal, InpMaxRiskPctHard));
+      return 0.0;
+   }
+   return lots;
 }
 
 //====================================================================
@@ -886,6 +1034,26 @@ void RollDay(datetime server)
    Say(StringFormat("--- new NY day, balance %.2f", g_dayStart));
 }
 
+int ModelSlot(string name)
+{
+   for(int i = 0; i < 5; i++) if(g_modelName[i] == name) return i;
+   return -1;
+}
+
+bool OnCooldown(string model)
+{
+   int i = ModelSlot(model);
+   if(i < 0 || g_lastFire[i] == 0) return false;
+   int bars = (int)((TimeCurrent() - g_lastFire[i]) / PeriodSeconds(PERIOD_CURRENT));
+   return (bars < InpCooldownBars);
+}
+
+void MarkFired(string model)
+{
+   int i = ModelSlot(model);
+   if(i >= 0) g_lastFire[i] = TimeCurrent();
+}
+
 bool DayBlocked()
 {
    if(g_locked)
@@ -894,6 +1062,7 @@ bool DayBlocked()
       else return true;
    }
    if(g_dayTrades >= InpMaxTradesPerDay) return true;
+   if(g_dayTrades >= InpHardCapPerDay)   return true;
    if(g_consecLoss >= InpMaxConsecLosses) return true;
 
    if(g_dayStart > 0)
@@ -953,7 +1122,23 @@ void Place(Setup &s)
       return;
    }
 
+   // A market order that ended up without a stop loss is an open-ended
+   // loss. Close it immediately rather than hope.
+   if(!s.isLimit && PositionSelect(g_sym))
+   {
+      if(PositionGetDouble(POSITION_SL) == 0.0)
+      {
+         if(!trade.PositionModify(g_sym, stop, tp))
+         {
+            Print("NO STOP LOSS on the open position - closing it now.");
+            trade.PositionClose(g_sym);
+            return;
+         }
+      }
+   }
+
    g_dayTrades++;
+   MarkFired(s.model);
    if(s.isLimit)
    {
       g_pend.ticket = trade.ResultOrder();
@@ -1050,6 +1235,7 @@ int OnInit()
    g_hasOpen = false;
    g_hasPend = false;
    g_dayStart = AccountInfoDouble(ACCOUNT_BALANCE);
+   ArrayInitialize(g_lastFire, 0);
 
    PrintFormat("ICTGold on %s %s | Unicorn %s  Judas %s  Turtle %s  TJR %s  OTE %s",
                g_sym, EnumToString((ENUM_TIMEFRAMES)Period()),
@@ -1098,13 +1284,31 @@ void OnTick()
    int now = LastClosed();
    if(now < InpAtrPeriod + 70) return;
 
+   // --- quality gates, before any model runs ------------------------
+   // These are what separate "a setup exists" from "this is worth
+   // risking money on". Without them the EA traded 28x more often
+   // than the model it was supposed to be running.
+   if(InpRequireKillzone && !InKillzone(TimeCurrent()))
+   {
+      Say("skip: outside killzone");
+      return;
+   }
+   double rHigh, rLow;
+   int ctx = MarketContext(now, rHigh, rLow);
+   if(InpRequireContext && ctx != 2 && ctx != 3)
+   {
+      Say(StringFormat("skip: context is %s",
+                       ctx == 0 ? "Consolidation" : "Expansion"));
+      return;
+   }
+
    // Evaluated in measured-expectancy order: the best model gets the bar.
    Setup s;
-   if(Unicorn(now, s)    && s.ok) { Place(s); return; }
-   if(JudasSwing(now, s) && s.ok) { Place(s); return; }
-   if(TurtleSoup(now, s) && s.ok) { Place(s); return; }
-   if(Tjr(now, s)        && s.ok) { Place(s); return; }
-   if(Ote(now, s)        && s.ok) { Place(s); return; }
+   if(!OnCooldown("Unicorn")    && Unicorn(now, s)    && s.ok) { Place(s); return; }
+   if(!OnCooldown("JudasSwing") && JudasSwing(now, s) && s.ok) { Place(s); return; }
+   if(!OnCooldown("TurtleSoup") && TurtleSoup(now, s) && s.ok) { Place(s); return; }
+   if(!OnCooldown("TJR")        && Tjr(now, s)        && s.ok) { Place(s); return; }
+   if(!OnCooldown("OTE")        && Ote(now, s)        && s.ok) { Place(s); return; }
 }
 
 void OnTrade()
