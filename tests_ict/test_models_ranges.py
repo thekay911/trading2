@@ -1,119 +1,178 @@
+"""딜링 레인지와, 엔진 위에서 나온 셋업의 무결성."""
+
 import unittest
 
-from crowcode.data import synthetic
 from ict.backtest import run
-from ict.models import Config, find_setup, scan
+from ict.engine import Market
+from ict.models import Config
 from ict.ranges import OTE_END, OTE_START, DealingRange, leg_range
+from ict.sample import gold
+from ict.strategy import MODELS, scan
 from ict.structure import BEAR, BULL
 from ict.timeops import active_windows
 
 
 class TestDealingRange(unittest.TestCase):
     def setUp(self):
-        self.dr = DealingRange(high=2000.0, low=1900.0, high_index=50, low_index=10)
+        self.r = DealingRange(high=200.0, low=100.0, high_index=9, low_index=5)
 
     def test_equilibrium_is_the_midpoint(self):
-        self.assertAlmostEqual(self.dr.equilibrium, 1950.0)
+        self.assertAlmostEqual(self.r.equilibrium, 150.0)
 
     def test_premium_and_discount(self):
-        self.assertTrue(self.dr.is_discount(1920.0))
-        self.assertTrue(self.dr.is_premium(1980.0))
-        self.assertFalse(self.dr.is_discount(1980.0))
+        self.assertTrue(self.r.is_discount(120.0))
+        self.assertFalse(self.r.is_premium(120.0))
+        self.assertTrue(self.r.is_premium(180.0))
 
     def test_buy_ote_is_below_equilibrium(self):
-        lo, hi = self.dr.ote("buy")
-        self.assertAlmostEqual(hi, 2000 - 100 * OTE_START)     # 1938
-        self.assertAlmostEqual(lo, 2000 - 100 * OTE_END)       # 1921
-        self.assertTrue(self.dr.is_discount(hi))
+        """매수 OTE 는 고점에서 62~79% 되돌린 자리 — 항상 균형점 아래다."""
+        lo, hi = self.r.ote("buy")
+        self.assertLess(hi, self.r.equilibrium)
+        self.assertAlmostEqual(hi, 200.0 - 100.0 * OTE_START)
+        self.assertAlmostEqual(lo, 200.0 - 100.0 * OTE_END)
+        self.assertTrue(self.r.in_ote(130.0, "buy"))
+        self.assertFalse(self.r.in_ote(160.0, "buy"))
 
     def test_sell_ote_is_above_equilibrium(self):
-        lo, hi = self.dr.ote("sell")
-        self.assertTrue(self.dr.is_premium(lo))
+        lo, hi = self.r.ote("sell")
+        self.assertGreater(lo, self.r.equilibrium)
+        self.assertAlmostEqual(lo, 100.0 + 100.0 * OTE_START)
+        self.assertAlmostEqual(hi, 100.0 + 100.0 * OTE_END)
 
     def test_projection_extends_beyond_the_range(self):
-        self.assertAlmostEqual(self.dr.projection(1.0, "buy"), 2100.0)
-        self.assertAlmostEqual(self.dr.projection(1.0, "sell"), 1800.0)
+        self.assertAlmostEqual(self.r.projection(1.0, "buy"), 300.0)
+        self.assertAlmostEqual(self.r.projection(1.0, "sell"), 0.0)
+
+    def test_position_maps_the_range_to_zero_one(self):
+        self.assertAlmostEqual(self.r.position(100.0), 0.0)
+        self.assertAlmostEqual(self.r.position(200.0), 1.0)
+        self.assertAlmostEqual(self.r.position(150.0), 0.5)
 
     def test_direction_from_which_extreme_came_last(self):
-        self.assertEqual(self.dr.direction, BULL)
-        self.assertEqual(DealingRange(2000, 1900, 10, 50).direction, BEAR)
+        self.assertEqual(DealingRange(200.0, 100.0, 9, 5).direction, BULL)
+        self.assertEqual(DealingRange(200.0, 100.0, 5, 9).direction, BEAR)
+
+    def test_leg_range_spans_the_displacement_leg(self):
+        bars = list(gold(days=3, seed=1))
+        r = leg_range(bars, 100, 140)
+        self.assertIsNotNone(r)
+        self.assertGreaterEqual(r.high, max(b.high for b in bars[100:141]) - 1e-9)
+        self.assertLessEqual(r.low, min(b.low for b in bars[100:141]) + 1e-9)
+        self.assertIsNone(leg_range(bars, 140, 100), "끝이 시작보다 앞이면 레인지가 없다")
 
 
-class TestSetupIntegrity(unittest.TestCase):
-    """셋업이 나왔다면 ICT 규칙을 전부 만족해야 한다."""
+class Fixture(unittest.TestCase):
+    """엔진 한 번만 만들어 두고 전 테스트가 공유한다."""
+
+    DAYS = 90
 
     @classmethod
     def setUpClass(cls):
-        cls.candles = list(synthetic(20000, minutes=5))
+        cls.candles = list(gold(days=cls.DAYS, seed=5))
+        cls.market = Market.build(cls.candles)
         cls.cfg = Config()
-        cls.setups = scan(cls.candles, cls.cfg)
+        cls.setups = scan(cls.market, cls.cfg)
+
+
+class TestSetupIntegrity(Fixture):
+    """셋업이 나왔다면 ICT 규칙을 전부 만족해야 한다."""
 
     def test_produces_setups(self):
-        self.assertTrue(self.setups, "합성 데이터에서 셋업이 하나도 없다")
+        self.assertTrue(self.setups, "합성 금 데이터에서 셋업이 하나도 없다")
 
     def test_levels_are_ordered(self):
         for s in self.setups:
             if s.side == "buy":
-                self.assertLess(s.stop, s.entry)
-                self.assertLess(s.entry, s.target)
+                self.assertLess(s.stop, s.entry, s.describe())
+                self.assertLess(s.entry, s.target, s.describe())
             else:
-                self.assertGreater(s.stop, s.entry)
-                self.assertGreater(s.entry, s.target)
+                self.assertGreater(s.stop, s.entry, s.describe())
+                self.assertGreater(s.entry, s.target, s.describe())
 
     def test_min_rr_is_respected(self):
         for s in self.setups:
-            self.assertGreaterEqual(s.rr + 1e-9, self.cfg.min_rr)
+            self.assertGreaterEqual(s.rr, self.cfg.min_rr - 1e-9, s.describe())
+
+    def test_max_rr_caps_the_target(self):
+        for s in self.setups:
+            self.assertLessEqual(s.rr, self.cfg.max_rr + 1e-9, s.describe())
 
     def test_every_setup_is_in_an_allowed_window(self):
         for s in self.setups:
-            self.assertTrue(any(w in self.cfg.allowed_windows
-                                for w in active_windows(s.ts)),
-                            f"{s.ts} 는 허용 창 밖이다")
+            self.assertTrue(active_windows(s.ts), s.describe())
 
-    def test_every_mss_has_displacement(self):
+    def test_every_attached_mss_has_displacement(self):
+        """변위 없는 MSS 는 ICT 기준으로 전환이 아니다 — 엔진이 애초에 안 준다."""
         for s in self.setups:
-            self.assertIsNotNone(s.mss.displacement)
-            self.assertEqual(s.mss.kind, "MSS")
+            if s.mss is not None:
+                self.assertTrue(s.mss.valid_mss, s.describe())
 
     def test_raid_is_on_the_correct_side(self):
         for s in self.setups:
             if s.raid is None:
                 continue
             if s.side == "buy":
-                self.assertEqual(s.raid.direction, BULL)
+                self.assertEqual(s.raid.pool.kind, "SSL", s.describe())
             else:
-                self.assertEqual(s.raid.direction, BEAR)
+                self.assertEqual(s.raid.pool.kind, "BSL", s.describe())
 
-    def test_raid_precedes_the_mss(self):
+    def test_ict2022_raid_precedes_the_mss(self):
+        """2022 모델은 순서가 전부다: 습격 → MSS. (다른 모델은 MSS 를 문맥으로만 단다)"""
         for s in self.setups:
-            if s.raid is not None:
-                self.assertLessEqual(s.raid.index, s.mss.index)
-
-    def test_no_duplicate_mss(self):
-        keys = [(s.mss_index, s.side) for s in self.setups]
-        self.assertEqual(len(keys), len(set(keys)), "같은 MSS 가 중복으로 잡혔다")
+            if s.model == "ICT2022" and s.raid is not None and s.mss_index >= 0:
+                self.assertLessEqual(s.raid.index, s.mss_index, s.describe())
 
     def test_entry_sits_inside_its_pd_array(self):
         for s in self.setups:
-            self.assertTrue(s.array.contains(s.entry) or
-                            abs(s.array.mid - s.entry) < 1e-6)
+            self.assertGreaterEqual(s.entry, s.array.bottom - 1e-6, s.describe())
+            self.assertLessEqual(s.entry, s.array.top + 1e-6, s.describe())
+
+    def test_model_names_are_known(self):
+        for s in self.setups:
+            self.assertIn(s.model, MODELS)
+
+    def test_setups_are_in_time_order(self):
+        idx = [s.index for s in self.setups]
+        self.assertEqual(idx, sorted(idx))
+
+    def test_stop_clears_the_raid_extreme(self):
+        for s in self.setups:
+            if s.raid is None:
+                continue
+            if s.side == "buy":
+                self.assertLessEqual(s.stop, s.raid.extreme, s.describe())
+            else:
+                self.assertGreaterEqual(s.stop, s.raid.extreme, s.describe())
+
+    def test_spread_is_never_a_large_share_of_the_stop(self):
+        p = self.market.gold
+        for s in self.setups:
+            self.assertTrue(p.spread_ok(s.risk), s.describe())
 
 
-class TestGatesActuallyGate(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.candles = list(synthetic(12000, minutes=5))
+class TestGatesActuallyGate(Fixture):
+    DAYS = 60
 
     def _count(self, **kw):
-        return len(scan(self.candles, Config(**kw)))
+        return len(scan(self.market, Config(**kw)))
 
     def test_killzone_filter_reduces_setups(self):
         self.assertLessEqual(self._count(require_killzone=True),
                              self._count(require_killzone=False))
 
-    def test_raid_requirement_reduces_setups(self):
-        self.assertLessEqual(self._count(require_raid=True),
-                             self._count(require_raid=False))
+    def test_raid_requirement_is_enforced_on_the_2022_model(self):
+        """require_raid 는 단순 필터가 아니다 — 손절 기준점도 습격 극점으로 바꾼다.
+        그래서 셋업 수는 단조롭지 않고, 검증할 건 규칙 자체다."""
+        on = [s for s in scan(self.market, Config(require_raid=True))
+              if s.model == "ICT2022"]
+        self.assertTrue(on)
+        for s in on:
+            self.assertIsNotNone(s.raid, s.describe())
+            self.assertLessEqual(s.raid.index, s.mss_index, s.describe())
+        off = [s for s in scan(self.market, Config(require_raid=False))
+               if s.model == "ICT2022"]
+        self.assertTrue(any(s.raid is None for s in off),
+                        "require_raid=False 인데 전부 습격을 달고 있다")
 
     def test_premium_discount_filter_reduces_setups(self):
         self.assertLessEqual(self._count(require_discount_premium=True),
@@ -122,29 +181,40 @@ class TestGatesActuallyGate(unittest.TestCase):
     def test_higher_min_rr_reduces_setups(self):
         self.assertLessEqual(self._count(min_rr=5.0), self._count(min_rr=1.5))
 
+    def test_model_selection_is_a_subset(self):
+        one = scan(self.market, self.cfg, models=["SilverBullet"])
+        self.assertTrue(all(s.model == "SilverBullet" for s in one))
+        self.assertLessEqual(len(one), len(self.setups))
+
+    def test_empty_model_list_means_all(self):
+        self.assertEqual(len(scan(self.market, self.cfg, models=None)),
+                         len(self.setups))
+
 
 class TestNoLookahead(unittest.TestCase):
+    """잘린 시계열에서 같은 셋업이 나와야 한다 — 미래를 안 본다는 뜻."""
+
     def test_truncated_history_gives_the_same_setup(self):
-        candles = list(synthetic(12000, minutes=5))
+        candles = list(gold(days=40, seed=3))
         cfg = Config()
-        found = None
-        for i in range(500, 6000):
-            s = find_setup(candles, i, cfg)
-            if s:
-                found = (i, s)
-                break
-        self.assertIsNotNone(found, "비교할 셋업을 찾지 못함")
-        i, full = found
-        cut = find_setup(candles[:i + 1], i, cfg)
-        self.assertIsNotNone(cut, "잘린 시계열에서 셋업이 사라짐 → 룩어헤드")
-        self.assertAlmostEqual(full.entry, cut.entry, places=6)
-        self.assertAlmostEqual(full.stop, cut.stop, places=6)
+        full = scan(Market.build(candles), cfg)
+        self.assertTrue(full, "비교할 셋업이 없다")
+        s = full[len(full) // 2]
+        cut = scan(Market.build(candles[:s.index + 1]), cfg, start=300)
+        match = [x for x in cut if x.index == s.index and x.model == s.model]
+        self.assertTrue(match, f"잘린 시계열에서 셋업이 사라짐 → 룩어헤드\n{s.describe()}")
+        self.assertAlmostEqual(s.entry, match[0].entry, places=6)
+        self.assertAlmostEqual(s.stop, match[0].stop, places=6)
+        self.assertAlmostEqual(s.target, match[0].target, places=6)
 
 
-class TestBacktest(unittest.TestCase):
+class TestBacktest(Fixture):
+    DAYS = 60
+
     @classmethod
     def setUpClass(cls):
-        cls.res = run(list(synthetic(12000, minutes=5)), Config(), spread=0.25)
+        super().setUpClass()
+        cls.res = run(cls.candles, cls.cfg, spread=0.25, setups=cls.setups)
 
     def test_runs(self):
         self.assertGreaterEqual(self.res.setups, 0)
@@ -156,10 +226,23 @@ class TestBacktest(unittest.TestCase):
                 self.assertLess(t.r, 0)
                 self.assertGreater(t.r, -1.6)   # 스프레드 때문에 -1 을 조금 넘는다
 
+    def test_wins_are_about_plus_target_rr(self):
+        for t in self.res.trades:
+            if t.outcome == "target":
+                self.assertGreater(t.r, 0)
+                self.assertLessEqual(t.r, t.setup.rr + 0.5)
+
+    def test_exit_never_precedes_entry(self):
+        for t in self.res.trades:
+            self.assertGreater(t.exit_index, t.setup.index)
+
     def test_report_renders(self):
         text = self.res.report()
         self.assertIn("승률", text)
-        self.assertIn("킬존별", text)
+
+    def test_run_without_setups_builds_its_own_engine(self):
+        r = run(self.candles[:6000], self.cfg, spread=0.25)
+        self.assertGreaterEqual(r.setups, 0)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,10 @@ from datetime import datetime
 from typing import Sequence
 
 from crowcode.data import Candle
-from ict.models import Config, Setup, scan
+from ict.engine import Market
+from ict.gold import STANDARD, GoldProfile
+from ict.models import Config, Setup
+from ict.strategy import scan
 
 
 @dataclass
@@ -78,7 +81,8 @@ class Result:
         ]
         if self.n:
             from collections import Counter
-            for name, counter in (("킬존", Counter(t.setup.killzone for t in self.trades)),
+            for name, counter in (("모델", Counter(t.setup.model for t in self.trades)),
+                                  ("킬존", Counter(t.setup.killzone for t in self.trades)),
                                   ("방향", Counter(t.setup.side for t in self.trades)),
                                   ("진입근거", Counter(t.setup.array.kind for t in self.trades))):
                 lines.append("-" * 62)
@@ -93,18 +97,26 @@ class Result:
 
 
 def _key(t: Trade, name: str) -> str:
-    return {"킬존": t.setup.killzone, "방향": t.setup.side,
+    return {"모델": t.setup.model, "킬존": t.setup.killzone, "방향": t.setup.side,
             "진입근거": t.setup.array.kind}[name]
 
 
 def run(candles: Sequence[Candle], cfg: Config = Config(),
-        spread: float = 0.25, max_hold: int = 288, start: int = 200) -> Result:
+        spread: float = 0.25, max_hold: int = 288, start: int = 200,
+        setups: Sequence[Setup] | None = None,
+        gold: GoldProfile = STANDARD,
+        models: Sequence[str] | None = None) -> Result:
     """셋업을 훑고, 지정가 체결 → 손절/목표까지 추적한다.
 
     max_hold: 이 봉 수를 넘기면 청산 (기본 288 = M5 하루).
+    setups:   미리 뽑아 둔 셋업 (ict.strategy.scan 결과). 없으면 여기서 훑는다.
+    gold:     XAUUSD 보정 프로파일 (setups 를 직접 넘기면 무시된다).
+    models:   쓸 모델 이름들. None 이면 전부.
     """
     candles = list(candles)
-    setups = scan(candles, cfg, start=start)
+    if setups is None:
+        setups = scan(Market.build(candles, gold=gold), cfg,
+                      models=models, start=start)
     trades: list[Trade] = []
 
     for s in setups:
