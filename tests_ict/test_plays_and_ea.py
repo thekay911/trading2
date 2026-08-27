@@ -42,8 +42,9 @@ class TestPlays(unittest.TestCase):
     def test_active_models_are_enabled_ones(self):
         self.assertEqual(set(ACTIVE), {n for n, p in PLAYS.items() if p.enabled})
 
-    def test_active_list_is_not_empty(self):
-        self.assertTrue(ACTIVE)
+    def test_active_list_is_empty_until_something_is_verified(self):
+        """우위가 확인된 모델이 하나도 없다. 비어 있는 게 맞는 상태다."""
+        self.assertEqual(ACTIVE, [])
 
     def test_risk_stays_in_the_one_to_two_percent_band(self):
         """형이 정한 범위. 여기를 넘으면 계획이 아니라 사고다."""
@@ -76,9 +77,15 @@ class TestPlays(unittest.TestCase):
             self.assertGreater(p.expectancy, 0.05,
                                f"{name}: 기대값 {p.expectancy}로는 못 켠다")
 
-    def test_only_thoroughly_measured_models_are_on(self):
-        """켜는 기준: 두 시간대 + 4년 구간 전부를 통과. 지금은 둘뿐이다."""
-        self.assertEqual(set(ACTIVE), {"Unicorn", "TurtleSoup"})
+    def test_nothing_trades_until_something_is_verified(self):
+        """체결 봉 손절 확인을 넣자 전 모델이 음수가 됐다. 켜 둘 근거가 없다."""
+        self.assertEqual(ACTIVE, [])
+
+    def test_the_ea_also_ships_with_everything_off(self):
+        ea = ea_inputs()
+        for key in ("InpUseUnicorn", "InpUseTurtleSoup", "InpUseJudasSwing",
+                    "InpUseOTE", "InpUseTJR"):
+            self.assertEqual(ea[key], "false", key)
 
     def test_disabled_plays_say_why(self):
         for name, p in PLAYS.items():
@@ -114,11 +121,16 @@ class TestPlaysChangeTheBacktest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.bars = list(gold(days=60, seed=5))
-        cls.setups = scan(Market.build(cls.bars), Config())
+        # 기본 실행 목록이 비어 있으므로 검증용으로 모델을 지정한다
+        cls.setups = scan(Market.build(cls.bars), Config(),
+                          models=["Unicorn", "TurtleSoup"])
 
-    def test_scan_defaults_to_active_models_only(self):
+    def test_scan_with_no_models_trades_nothing(self):
+        """기본 실행 목록이 비었으면 스캔도 아무것도 내지 않아야 한다."""
+        self.assertEqual(scan(Market.build(self.bars), Config()), [])
+
+    def test_named_models_still_work(self):
         self.assertTrue(self.setups)
-        self.assertEqual({s.model for s in self.setups} - set(ACTIVE), set())
 
     def test_all_models_is_a_superset(self):
         every = scan(Market.build(self.bars), Config(), models=list(MODELS))
@@ -330,3 +342,35 @@ class TestEaFileHealth(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBacktesterIsHonest(unittest.TestCase):
+    """체결된 그 봉에서도 손절을 확인해야 한다.
+
+    안 하면 손절이 좁을수록 성적이 좋아진다. 실제로 그렇게 나왔었고,
+    그 숫자를 근거로 모델을 골라 사용자에게 보냈다.
+    """
+
+    def test_a_stop_hit_on_the_fill_bar_is_a_loss(self):
+        from datetime import datetime, timedelta, timezone
+        from crowcode.data import Candle
+        from ict.backtest import run
+        from ict.models import Setup
+        from ict import liquidity as liq, pdarrays as pda
+        from ict.structure import BULL, StructureEvent
+
+        t0 = datetime(2025, 1, 6, 14, 0, tzinfo=timezone.utc)
+        bars = [Candle(t0 + timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.0)
+                for i in range(10)]
+        # 체결 봉: 진입가에 닿고 같은 봉에서 손절까지 뚫는다
+        bars[3] = Candle(bars[3].ts, 100.0, 100.2, 90.0, 99.0)
+        arr = pda.PDArray("FVG", BULL, 100.0, 99.0, 2)
+        mss = StructureEvent(2, bars[2].ts, "MSS", BULL, 100.0, 1)
+        s = Setup(ts=bars[2].ts, index=2, model="TurtleSoup", side="buy",
+                  entry=100.0, stop=99.0, target=104.0, array=arr, raid=None,
+                  mss=mss, target_pool=None, killzone="LondonKZ")
+        r = run(bars, setups=[s], spread=0.0, use_plays=False, max_hold=8)
+        self.assertEqual(len(r.trades), 1)
+        self.assertEqual(r.trades[0].outcome, "stop",
+                         "체결 봉의 손절을 놓쳤다 — 좁은 손절이 공짜로 통과한다")
+        self.assertLess(r.trades[0].r, 0)

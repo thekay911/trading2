@@ -158,6 +158,19 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
                 fill = s.entry + sp if s.side == "buy" else s.entry - sp
                 if abs(fill - stop) <= 0:
                     break
+                # 체결된 그 봉에서도 손절을 확인한다.
+                #
+                # 다음 봉부터 보면 손절이 좁을수록 성적이 좋아진다. 봉 하나가
+                # $20 인데 손절이 $2 면 실제로는 같은 봉 안에서 털리는 일이
+                # 잦은데, 그 손실이 통째로 사라지기 때문이다. 실제로 손절폭
+                # 0.5xATR 미만 구간이 +0.341R 로 제일 좋게 나왔었다 —
+                # 시장이 아니라 백테스터가 만든 숫자였다.
+                # 봉 안의 순서는 OHLC 로 알 수 없으니 보수적으로 본다.
+                if (s.side == "buy" and c.low <= stop) or \
+                        (s.side == "sell" and c.high >= stop):
+                    r = ((stop - fill) if s.side == "buy" else (fill - stop)) / risk0
+                    trades.append(Trade(s, i, stop, c.ts, "stop", r))
+                    break
                 continue
 
             # 본전 이동은 손절 판정보다 먼저. 같은 봉에서 목표에 닿았다면

@@ -2,6 +2,25 @@
 //|                                                     ICTGold.mq5  |
 //|   ICT models for XAUUSD, calibrated on real gold data.           |
 //|                                                                  |
+//|  ****************************************************************|
+//|  *  DO NOT TRADE THIS. NO MODEL HERE HAS A MEASURED EDGE.       *|
+//|  *                                                              *|
+//|  *  Every positive number previously reported for this EA came  *|
+//|  *  from a backtester bug: it checked the stop starting on the  *|
+//|  *  bar AFTER the fill, never on the fill bar itself. 96% of    *|
+//|  *  these setups carry a stop under 1x ATR, so on gold - where  *|
+//|  *  one M15 bar can span $20 against a $2 stop - that gave      *|
+//|  *  every tight stop a free pass through its worst moment.      *|
+//|  *                                                              *|
+//|  *  With the stop checked on the fill bar:                      *|
+//|  *     as shipped        -142.1R over 1,775 trades              *|
+//|  *     stop >= 1.0x ATR   -27.9R                                *|
+//|  *     stop >= 3.0x ATR    +8.9R  (+0.005R/trade = noise)       *|
+//|  *                                                              *|
+//|  *  All models therefore ship DISABLED. Turning one on is a     *|
+//|  *  decision to trade something that has not been shown to work.*|
+//|  ****************************************************************|
+//|                                                                  |
 //|   Measured on real XAUUSD 2004-06 to 2026-01, on TWO timeframes  |
 //|   independently: M30 (248,912 bars) and M15 (494,235 bars).      |
 //|   A model is on by default only if it survived BOTH, and stayed  |
@@ -45,9 +64,9 @@
 // Inputs
 //====================================================================
 input group "=== Models (each has its own plan) ==="
-input bool   InpUseUnicorn      = true;    // ON: only model positive in all six eras
+input bool   InpUseUnicorn      = false;    // ON: only model positive in all six eras
 input bool   InpUseJudasSwing   = false;   // OFF: positive on M30, negative on M15
-input bool   InpUseTurtleSoup   = true;    // ON: positive in five of six eras
+input bool   InpUseTurtleSoup   = false;    // ON: positive in five of six eras
 input bool   InpUseOTE          = false;   // OFF: sign flips between timeframes
 input bool   InpUseTJR          = false;   // OFF: edge decays in the last three eras
 
@@ -1301,6 +1320,12 @@ int OnInit()
    g_dayStart = AccountInfoDouble(ACCOUNT_BALANCE);
    ArrayInitialize(g_lastFire, 0);
 
+   if(!InpUseUnicorn && !InpUseJudasSwing && !InpUseTurtleSoup
+      && !InpUseTJR && !InpUseOTE)
+   {
+      Print("All models are off. None of them has a measured edge -");
+      Print("see the header. Nothing will be traded until you turn one on.");
+   }
    PrintFormat("ICTGold on %s %s | Unicorn %s  Judas %s  Turtle %s  TJR %s  OTE %s",
                g_sym, EnumToString((ENUM_TIMEFRAMES)Period()),
                InpUseUnicorn    ? "on" : "off",

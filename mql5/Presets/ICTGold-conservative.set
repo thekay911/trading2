@@ -1,8 +1,8 @@
-; 1% risk, 2 setups a day
+; If you turn a model on anyway: 1% risk, 2 a day
 ; ICTGold.mq5 preset
-InpUseUnicorn=true
+InpUseUnicorn=false
 InpUseJudasSwing=false
-InpUseTurtleSoup=true
+InpUseTurtleSoup=false
 InpUseOTE=false
 InpUseTJR=false
 InpUNI_TargetRR=4.0
@@ -58,7 +58,7 @@ InpBlockFridayLate=true
 InpFridayCutoffNY=15.0
 InpMaxTradesPerDay=2
 InpHardCapPerDay=10
-InpMaxConsecLosses=2
+InpMaxConsecLosses=3
 InpMaxDailyLossPct=4.0
 InpHardStopPct=10.0
 InpHaltNeedsReview=true

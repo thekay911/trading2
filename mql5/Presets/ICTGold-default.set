@@ -1,8 +1,8 @@
-; Exness GMT+2, M15 or M30 chart
+; All models OFF - no measured edge. See the file header.
 ; ICTGold.mq5 preset
-InpUseUnicorn=true
+InpUseUnicorn=false
 InpUseJudasSwing=false
-InpUseTurtleSoup=true
+InpUseTurtleSoup=false
 InpUseOTE=false
 InpUseTJR=false
 InpUNI_TargetRR=4.0
