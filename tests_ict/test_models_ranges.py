@@ -71,7 +71,7 @@ class Fixture(unittest.TestCase):
         cls.candles = list(gold(days=cls.DAYS, seed=5))
         cls.market = Market.build(cls.candles)
         cls.cfg = Config()
-        cls.setups = scan(cls.market, cls.cfg)
+        cls.setups = scan(cls.market, cls.cfg, models=list(MODELS))
 
 
 class TestSetupIntegrity(Fixture):
@@ -154,7 +154,7 @@ class TestGatesActuallyGate(Fixture):
     DAYS = 60
 
     def _count(self, **kw):
-        return len(scan(self.market, Config(**kw)))
+        return len(scan(self.market, Config(**kw), models=list(MODELS)))
 
     def test_killzone_filter_reduces_setups(self):
         self.assertLessEqual(self._count(require_killzone=True),
@@ -163,14 +163,14 @@ class TestGatesActuallyGate(Fixture):
     def test_raid_requirement_is_enforced_on_the_2022_model(self):
         """require_raid 는 단순 필터가 아니다 — 손절 기준점도 습격 극점으로 바꾼다.
         그래서 셋업 수는 단조롭지 않고, 검증할 건 규칙 자체다."""
-        on = [s for s in scan(self.market, Config(require_raid=True))
-              if s.model == "ICT2022"]
+        on = [s for s in scan(self.market, Config(require_raid=True),
+                              models=["ICT2022"])]
         self.assertTrue(on)
         for s in on:
             self.assertIsNotNone(s.raid, s.describe())
             self.assertLessEqual(s.raid.index, s.mss_index, s.describe())
-        off = [s for s in scan(self.market, Config(require_raid=False))
-               if s.model == "ICT2022"]
+        off = [s for s in scan(self.market, Config(require_raid=False),
+                               models=["ICT2022"])]
         self.assertTrue(any(s.raid is None for s in off),
                         "require_raid=False 인데 전부 습격을 달고 있다")
 
@@ -186,9 +186,11 @@ class TestGatesActuallyGate(Fixture):
         self.assertTrue(all(s.model == "SilverBullet" for s in one))
         self.assertLessEqual(len(one), len(self.setups))
 
-    def test_empty_model_list_means_all(self):
-        self.assertEqual(len(scan(self.market, self.cfg, models=None)),
-                         len(self.setups))
+    def test_no_model_list_means_the_active_default(self):
+        """models 를 안 주면 실측에서 살아남은 모델만 돈다."""
+        from ict.plays import ACTIVE
+        got = scan(self.market, self.cfg, models=None)
+        self.assertEqual({s.model for s in got} - set(ACTIVE), set())
 
 
 class TestNoLookahead(unittest.TestCase):
@@ -197,10 +199,11 @@ class TestNoLookahead(unittest.TestCase):
     def test_truncated_history_gives_the_same_setup(self):
         candles = list(gold(days=40, seed=3))
         cfg = Config()
-        full = scan(Market.build(candles), cfg)
+        full = scan(Market.build(candles), cfg, models=list(MODELS))
         self.assertTrue(full, "비교할 셋업이 없다")
         s = full[len(full) // 2]
-        cut = scan(Market.build(candles[:s.index + 1]), cfg, start=300)
+        cut = scan(Market.build(candles[:s.index + 1]), cfg,
+                   models=list(MODELS), start=300)
         match = [x for x in cut if x.index == s.index and x.model == s.model]
         self.assertTrue(match, f"잘린 시계열에서 셋업이 사라짐 → 룩어헤드\n{s.describe()}")
         self.assertAlmostEqual(s.entry, match[0].entry, places=6)

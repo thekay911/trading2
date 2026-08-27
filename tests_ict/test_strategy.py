@@ -23,7 +23,8 @@ class Base(unittest.TestCase):
         cls.bars = list(gold(days=90, seed=5))
         cls.m = Market.build(cls.bars)
         cls.cfg = Config()
-        cls.setups = scan(cls.m, cls.cfg)
+        # 모델별 규칙을 검증하는 파일이므로 기본 실행 목록이 아니라 전부 돌린다
+        cls.setups = scan(cls.m, cls.cfg, models=list(MODELS))
         cls.by_model = {}
         for s in cls.setups:
             cls.by_model.setdefault(s.model, []).append(s)

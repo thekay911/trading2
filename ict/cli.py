@@ -16,6 +16,7 @@ from ict.backtest import run
 from ict.engine import Market
 from ict.gold import PROFILES, profile
 from ict.models import Config
+from ict.plays import ACTIVE, table as plays_table
 from ict.strategy import MODELS, scan
 from ict.study import full_report
 
@@ -79,7 +80,8 @@ def cmd_backtest(args) -> int:
     s = _series(args)
     cfg = _config(args)
     m, g = _market(args, s)
-    names = args.models.split(",") if args.models else None
+    names = args.models.split(",") if args.models else (
+        list(MODELS) if getattr(args, "all_models", False) else list(ACTIVE))
     setups = scan(m, cfg, names)
     res = run(s, cfg, spread=g.spread, max_hold=args.max_hold, setups=setups)
     print(res.report(args.title or "ICT 모델 전체"))
@@ -100,7 +102,8 @@ def cmd_signal(args) -> int:
     from ict.bias import evaluate
     print(evaluate(m.candles, now, m.gold).describe())
     print()
-    names = args.models.split(",") if args.models else list(MODELS)
+    names = args.models.split(",") if args.models else (
+        list(MODELS) if getattr(args, "all_models", False) else list(ACTIVE))
     for name in names:
         setup = MODELS[name](m, now, cfg)
         if setup:
@@ -113,7 +116,8 @@ def cmd_signal(args) -> int:
 def cmd_setups(args) -> int:
     s = _series(args)
     m, _ = _market(args, s)
-    names = args.models.split(",") if args.models else None
+    names = args.models.split(",") if args.models else (
+        list(MODELS) if getattr(args, "all_models", False) else list(ACTIVE))
     found = scan(m, _config(args), names)
     print(f"셋업 {len(found)}건")
     from collections import Counter
@@ -153,7 +157,9 @@ def main(argv=None) -> int:
     common.add_argument("--profile", default="standard", choices=sorted(PROFILES),
                         help="금 프로필 (standard / raw / strict)")
     common.add_argument("--spread", type=float, help="스프레드(달러). 생략 시 프로필 값")
-    common.add_argument("--models", help="쉼표로 모델 선택 (예: ICT2022,SilverBullet)")
+    common.add_argument("--models", help="쉼표로 모델 선택 (예: TurtleSoup,OTE)")
+    common.add_argument("--all-models", action="store_true", dest="all_models",
+                        help="기본에서 빠진 모델까지 전부 (실측 근거 없음)")
     common.add_argument("--title")
     common.add_argument("--set", action="append", metavar="KEY=VALUE")
 
@@ -180,6 +186,9 @@ def main(argv=None) -> int:
 
     f = sub.add_parser("profile", help="현재 변동성 기준 임계값", parents=[common])
     f.set_defaults(func=cmd_profile)
+
+    g = sub.add_parser("plays", help="모델별 청산 계획과 채택 근거")
+    g.set_defaults(func=lambda a: (print(plays_table()), 0)[1])
 
     args = p.parse_args(argv)
     return args.func(args)

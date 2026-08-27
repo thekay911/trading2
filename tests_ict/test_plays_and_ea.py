@@ -1,0 +1,232 @@
+"""청산 계획과, 그 계획이 MT5 EA 에 그대로 들어갔는지.
+
+전에 EA 기본값과 프리셋이 서로 달라서, .set 을 안 불러오면 완전히 다른
+설정으로 돌아간 적이 있다. 사람이 눈으로 맞추는 건 반드시 어긋난다.
+"""
+
+import pathlib
+import re
+import unittest
+
+from ict.backtest import run
+from ict.engine import Market
+from ict.models import Config
+from ict.plays import ACTIVE, PLAYS, Play, play, table
+from ict.sample import gold
+from ict.strategy import MODELS, scan
+
+EA = pathlib.Path("mql5/Experts/ICTGold.mq5")
+PRESET = pathlib.Path("mql5/Presets/ICTGold-default.set")
+
+
+def ea_inputs() -> dict[str, str]:
+    src = EA.read_text()
+    return {m[2]: m[3].strip()
+            for m in re.finditer(r'^input\s+(\S+)\s+(\w+)\s*=\s*([^;]+);', src, re.M)}
+
+
+def preset() -> dict[str, str]:
+    out = {}
+    for line in PRESET.read_text().splitlines():
+        if line.startswith(";") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+class TestPlays(unittest.TestCase):
+    def test_every_model_has_a_play(self):
+        self.assertEqual(set(PLAYS), set(MODELS))
+
+    def test_active_models_are_enabled_ones(self):
+        self.assertEqual(set(ACTIVE), {n for n, p in PLAYS.items() if p.enabled})
+
+    def test_active_list_is_not_empty(self):
+        self.assertTrue(ACTIVE)
+
+    def test_risk_stays_in_the_one_to_two_percent_band(self):
+        """형이 정한 범위. 여기를 넘으면 계획이 아니라 사고다."""
+        for p in PLAYS.values():
+            self.assertGreaterEqual(p.risk_pct, 1.0, p.model)
+            self.assertLessEqual(p.risk_pct, 2.0, p.model)
+
+    def test_targets_and_holds_are_sane(self):
+        for p in PLAYS.values():
+            self.assertGreater(p.target_rr, 0, p.model)
+            self.assertGreater(p.max_hold, 0, p.model)
+            self.assertLessEqual(p.max_hold, 288, f"{p.model}: 하루를 넘긴다")
+
+    def test_breakeven_fires_before_the_target(self):
+        """본전 이동이 목표보다 늦으면 영원히 안 옮겨진다."""
+        for p in PLAYS.values():
+            if p.be_at > 0:
+                self.assertLess(p.be_at, p.target_rr, p.model)
+
+    def test_every_play_records_why(self):
+        for p in PLAYS.values():
+            self.assertGreater(len(p.why), 40, f"{p.model}: 근거가 없다")
+
+    def test_unknown_model_raises(self):
+        with self.assertRaises(KeyError):
+            play("없는모델")
+
+    def test_table_renders_every_model(self):
+        t = table()
+        for name in PLAYS:
+            self.assertIn(name, t)
+
+    def test_plays_are_frozen(self):
+        with self.assertRaises(Exception):
+            PLAYS["OTE"].risk_pct = 9.0    # type: ignore[misc]
+
+
+class TestPlaysChangeTheBacktest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.bars = list(gold(days=60, seed=5))
+        cls.setups = scan(Market.build(cls.bars), Config())
+
+    def test_scan_defaults_to_active_models_only(self):
+        self.assertTrue(self.setups)
+        self.assertEqual({s.model for s in self.setups} - set(ACTIVE), set())
+
+    def test_all_models_is_a_superset(self):
+        every = scan(Market.build(self.bars), Config(), models=list(MODELS))
+        self.assertGreaterEqual(len(every), len(self.setups))
+
+    def test_target_is_capped_at_the_plays_rr(self):
+        r = run(self.bars, setups=self.setups, use_plays=True)
+        for t in r.trades:
+            if t.outcome == "target":
+                self.assertLessEqual(t.r, PLAYS[t.setup.model].target_rr + 1e-6,
+                                     t.setup.describe())
+
+    def test_hold_limit_is_enforced_per_model(self):
+        r = run(self.bars, setups=self.setups, use_plays=True)
+        for t in r.trades:
+            held = t.exit_index - t.setup.index
+            self.assertLessEqual(held, PLAYS[t.setup.model].max_hold,
+                                 t.setup.describe())
+
+    def test_breakeven_exits_are_not_full_losses(self):
+        r = run(self.bars, setups=self.setups, use_plays=True)
+        for t in r.trades:
+            if t.outcome == "breakeven":
+                self.assertGreater(t.r, -0.6, t.setup.describe())
+
+    def test_disabling_plays_changes_the_result(self):
+        a = run(self.bars, setups=self.setups, use_plays=True)
+        b = run(self.bars, setups=self.setups, use_plays=False)
+        self.assertNotAlmostEqual(a.total_r, b.total_r, places=3)
+
+
+@unittest.skipUnless(EA.exists(), "EA 파일 없음")
+class TestEaMatchesPlays(unittest.TestCase):
+    """EA 기본값이 파이썬 계획과 같은 숫자여야 한다."""
+
+    PREFIX = {"TurtleSoup": "InpTS_", "JudasSwing": "InpJS_", "OTE": "InpOTE_"}
+
+    def setUp(self):
+        self.ea = ea_inputs()
+
+    def test_active_models_have_ea_inputs(self):
+        for name in ACTIVE:
+            self.assertIn(name, self.PREFIX, f"{name} 이 EA 에 없다")
+
+    def test_target_rr_matches(self):
+        for name, pre in self.PREFIX.items():
+            self.assertAlmostEqual(float(self.ea[pre + "TargetRR"]),
+                                   PLAYS[name].target_rr, msg=name)
+
+    def test_hold_bars_match(self):
+        for name, pre in self.PREFIX.items():
+            self.assertEqual(int(self.ea[pre + "HoldBars"]),
+                             PLAYS[name].max_hold, name)
+
+    def test_breakeven_matches(self):
+        for name, pre in self.PREFIX.items():
+            self.assertAlmostEqual(float(self.ea[pre + "BreakevenR"]),
+                                   PLAYS[name].be_at, msg=name)
+
+    def test_risk_matches(self):
+        for name, pre in self.PREFIX.items():
+            self.assertAlmostEqual(float(self.ea[pre + "RiskPct"]),
+                                   PLAYS[name].risk_pct, msg=name)
+
+    def test_enabled_flags_match(self):
+        flag = {"TurtleSoup": "InpUseTurtleSoup", "JudasSwing": "InpUseJudasSwing",
+                "OTE": "InpUseOTE"}
+        for name, key in flag.items():
+            self.assertEqual(self.ea[key] == "true", PLAYS[name].enabled, name)
+
+    def test_gold_calibration_matches(self):
+        from ict.gold import STANDARD
+        pairs = [("InpDisplacementATR", STANDARD.displacement_atr),
+                 ("InpDisplacementBP", STANDARD.displacement_bp),
+                 ("InpMinFvgATR", STANDARD.min_fvg_atr),
+                 ("InpMinFvgBP", STANDARD.min_fvg_bp),
+                 ("InpFvgSpreadMult", STANDARD.fvg_spread_multiple),
+                 ("InpStopBufferATR", STANDARD.stop_buffer_atr),
+                 ("InpStopBufferBP", STANDARD.stop_buffer_bp),
+                 ("InpMaxEntryDistATR", STANDARD.max_entry_distance_atr),
+                 ("InpMaxSpreadToStop", STANDARD.max_spread_to_stop),
+                 ("InpRolloverStart", STANDARD.rollover_start),
+                 ("InpRolloverEnd", STANDARD.rollover_end)]
+        for key, want in pairs:
+            self.assertAlmostEqual(float(self.ea[key]), want, msg=key)
+
+
+@unittest.skipUnless(PRESET.exists(), "프리셋 없음")
+class TestPresetMatchesEaDefaults(unittest.TestCase):
+    """.set 을 안 불러와도 같은 설정으로 돌아야 한다."""
+
+    def test_every_input_is_in_the_preset(self):
+        ea, ps = ea_inputs(), preset()
+        self.assertEqual(set(ea), set(ps))
+
+    def test_values_are_identical(self):
+        ea, ps = ea_inputs(), preset()
+        for k, v in ea.items():
+            a, b = ps[k], v
+            try:
+                self.assertAlmostEqual(float(a), float(b), msg=k)
+            except ValueError:
+                self.assertEqual(a, b, k)
+
+
+@unittest.skipUnless(EA.exists(), "EA 파일 없음")
+class TestEaFileHealth(unittest.TestCase):
+    def test_is_pure_ascii(self):
+        """한글 주석이 들어가면 MetaEditor 인코딩에서 깨진다."""
+        raw = EA.read_bytes()
+        try:
+            raw.decode("ascii")
+        except UnicodeDecodeError as e:
+            self.fail(f"ASCII 아님: 바이트 {e.start}")
+
+    def test_braces_balance(self):
+        src = EA.read_text()
+        self.assertEqual(src.count("{"), src.count("}"))
+        self.assertEqual(src.count("("), src.count(")"))
+
+    def test_dry_run_is_off_by_default(self):
+        """이것 때문에 전에 몇 년치 백테스트가 통째로 무거래였다."""
+        self.assertEqual(ea_inputs()["InpDryRun"], "false")
+
+    def test_tester_ignores_dry_run(self):
+        self.assertIn("MQL_TESTER", EA.read_text())
+
+    def test_spread_guard_is_in_price_not_points(self):
+        """3자리 금 호가에서 points 로 비교하면 전부 걸러진다."""
+        src = EA.read_text()
+        self.assertIn("InpMaxSpreadPrice", src)
+        self.assertNotIn("InpMaxSpreadPoints", src)
+
+    def test_server_offset_input_exists(self):
+        """테스터의 TimeGMT() 는 서버시간이라 보정이 없으면 세션이 밀린다."""
+        self.assertIn("InpServerGmtOffset", ea_inputs())
+
+
+if __name__ == "__main__":
+    unittest.main()

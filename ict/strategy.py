@@ -21,6 +21,7 @@ from ict import pdarrays as pda
 from ict.engine import Market
 from ict.gold import GoldProfile
 from ict.models import Config, Setup
+from ict.plays import ACTIVE
 from ict.ranges import leg_range
 from ict.structure import BEAR, BULL, Dir
 from ict.timeops import (
@@ -347,8 +348,12 @@ MODELS: dict[str, Callable[..., Setup | None]] = {
 
 def scan(m: Market, cfg: Config = Config(), models: Sequence[str] | None = None,
          start: int = 300, cooldown: int = 12) -> list[Setup]:
-    """전 구간 훑기. 모델별로 `cooldown` 봉 안의 중복은 버린다."""
-    names = list(models) if models else list(MODELS)
+    """전 구간 훑기. 모델별로 `cooldown` 봉 안의 중복은 버린다.
+
+    models 를 안 주면 `ict.plays.ACTIVE` (실측에서 살아남은 모델) 만 돈다.
+    전부 보려면 `models=list(MODELS)` 를 넘긴다.
+    """
+    names = list(models) if models else list(ACTIVE)
     out: list[Setup] = []
     last: dict[str, int] = {}
     for i in range(start, len(m)):

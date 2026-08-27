@@ -14,6 +14,7 @@ from crowcode.data import Candle
 from ict.engine import Market
 from ict.gold import STANDARD, GoldProfile
 from ict.models import Config, Setup
+from ict.plays import ACTIVE, PLAYS, Play
 from ict.strategy import scan
 
 
@@ -105,23 +106,43 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
         spread: float = 0.25, max_hold: int = 288, start: int = 200,
         setups: Sequence[Setup] | None = None,
         gold: GoldProfile = STANDARD,
-        models: Sequence[str] | None = None) -> Result:
+        models: Sequence[str] | None = None,
+        use_plays: bool = True) -> Result:
     """셋업을 훑고, 지정가 체결 → 손절/목표까지 추적한다.
 
-    max_hold: 이 봉 수를 넘기면 청산 (기본 288 = M5 하루).
-    setups:   미리 뽑아 둔 셋업 (ict.strategy.scan 결과). 없으면 여기서 훑는다.
-    gold:     XAUUSD 보정 프로파일 (setups 를 직접 넘기면 무시된다).
-    models:   쓸 모델 이름들. None 이면 전부.
+    한 봉 안에서 손절과 목표가 모두 닿으면 **손절 우선**이다.
+
+    use_plays: 모델별 청산 계획(ict.plays)을 적용한다. 목표 R, 보유한도,
+               본전 이동이 모델마다 달라진다. False 면 셋업이 들고 있는
+               유동성 목표를 그대로 쓰고 max_hold 를 전부에 적용한다.
+    max_hold:  계획이 없는 모델의 기본 보유한도 (288 = M5 하루).
+    setups:    미리 뽑아 둔 셋업 (ict.strategy.scan 결과). 없으면 여기서 훑는다.
+    gold:      XAUUSD 보정 프로파일 (setups 를 직접 넘기면 무시된다).
+    models:    쓸 모델 이름들. None 이면 기본 실행 목록(ict.plays.ACTIVE).
     """
     candles = list(candles)
     if setups is None:
         setups = scan(Market.build(candles, gold=gold), cfg,
-                      models=models, start=start)
+                      models=list(models) if models else list(ACTIVE), start=start)
     trades: list[Trade] = []
 
     for s in setups:
+        pl: Play | None = PLAYS.get(s.model) if use_plays else None
+        hold = pl.max_hold if pl else max_hold
+        risk0 = s.risk
+        if risk0 <= 0:
+            continue
+        # 계획이 있으면 목표를 그 R 로 자른다. 없으면 셋업의 유동성 목표.
+        target = s.target
+        if pl:
+            capped = (s.entry + risk0 * pl.target_rr if s.side == "buy"
+                      else s.entry - risk0 * pl.target_rr)
+            target = min(target, capped) if s.side == "buy" else max(target, capped)
+
         fill = None
-        for i in range(s.index + 1, min(s.index + 1 + max_hold, len(candles))):
+        stop = s.stop
+        moved = False
+        for i in range(s.index + 1, min(s.index + 1 + hold, len(candles))):
             c = candles[i]
             if fill is None:
                 touched = (s.side == "buy" and c.low <= s.entry) or \
@@ -129,28 +150,35 @@ def run(candles: Sequence[Candle], cfg: Config = Config(),
                 if not touched:
                     continue
                 fill = s.entry + spread if s.side == "buy" else s.entry - spread
-                risk = abs(fill - s.stop)
-                if risk <= 0:
+                if abs(fill - stop) <= 0:
                     break
                 continue
 
-            risk = abs(fill - s.stop)
-            hit_stop = c.low <= s.stop if s.side == "buy" else c.high >= s.stop
-            hit_tp = c.high >= s.target if s.side == "buy" else c.low <= s.target
+            # 본전 이동은 손절 판정보다 먼저. 같은 봉에서 목표에 닿았다면
+            # 이미 그 전에 be_at 을 지났다는 뜻이므로 순서가 맞다.
+            if pl and pl.be_at > 0 and not moved:
+                prog = ((c.high - fill) if s.side == "buy" else (fill - c.low)) / risk0
+                if prog >= pl.be_at:
+                    stop = fill
+                    moved = True
+
+            hit_stop = c.low <= stop if s.side == "buy" else c.high >= stop
+            hit_tp = c.high >= target if s.side == "buy" else c.low <= target
             if hit_stop:                                  # 보수적으로 손절 우선
-                r = (s.stop - fill) / risk if s.side == "buy" else (fill - s.stop) / risk
-                trades.append(Trade(s, i, s.stop, c.ts, "stop", r))
+                r = ((stop - fill) if s.side == "buy" else (fill - stop)) / risk0
+                trades.append(Trade(s, i, stop, c.ts,
+                                    "breakeven" if moved else "stop", r))
                 break
             if hit_tp:
-                r = (s.target - fill) / risk if s.side == "buy" else (fill - s.target) / risk
-                trades.append(Trade(s, i, s.target, c.ts, "target", r))
+                r = ((target - fill) if s.side == "buy" else (fill - target)) / risk0
+                trades.append(Trade(s, i, target, c.ts, "target", r))
                 break
         else:
             if fill is not None:
-                last = candles[min(s.index + max_hold, len(candles) - 1)]
-                risk = abs(fill - s.stop)
-                r = ((last.close - fill) if s.side == "buy" else (fill - last.close)) / risk
-                trades.append(Trade(s, last_index(candles, last), last.close, last.ts, "open", r))
+                last = candles[min(s.index + hold, len(candles) - 1)]
+                r = ((last.close - fill) if s.side == "buy" else (fill - last.close)) / risk0
+                trades.append(Trade(s, last_index(candles, last), last.close, last.ts,
+                                    "open", r))
 
     return Result(trades, len(setups), spread)
 
