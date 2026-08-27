@@ -18,6 +18,14 @@
 
 #include <Trade/Trade.mqh>
 
+//--- How the stop distance is decided
+enum ENUM_STOP_MODE
+  {
+   STOP_STRUCTURE,   // structure only - skip setups outside Min/Max
+   STOP_CLAMP,       // widen a tight stop to Min; skip if structure needs more than Max
+   STOP_FIXED        // always exactly InpFixedSLPrice - ignore structure
+  };
+
 //====================================================================
 // Inputs
 //====================================================================
@@ -49,9 +57,8 @@ input group "=== XAUUSD stop guards (price = gold dollars) ==="
 input double           InpMinSLPrice       = 2.50;        // reject stops tighter than this
 input double           InpMaxSLPrice       = 25.00;       // reject stops wider than this
 input double           InpMaxSpreadRatio   = 0.08;        // max spread / stop distance
-input bool             InpClampStopToMin   = false;       // widen a tight stop to InpMinSLPrice
-                                                          // (never narrows - a stop inside the
-                                                          //  structure is just a place to get hit)
+input ENUM_STOP_MODE   InpStopMode         = STOP_FIXED;  // stop sizing rule
+input double           InpFixedSLPrice     = 2.00;        // STOP_FIXED: stop in price ($2.00 = 20 pips)
 
 input group "=== Risk management ==="
 input double           InpRiskPercent      = 2.0;         // risk per trade (% balance)
@@ -76,7 +83,7 @@ input double           InpFridayCutoff     = 19.0;        // GMT hour
 input string           InpNewsTimes        = "";          // "2024.02.02 13:30;..." (GMT)
 input int              InpNewsBeforeMin    = 15;          // blackout before news
 input int              InpNewsAfterMin     = 30;          // blackout after news
-input int              InpMaxSpreadPoints  = 40;          // skip when spread is wider
+input int              InpMaxSpreadPoints  = 60;          // skip when spread is wider
 
 input group "=== Circuit breaker (stop, review, then resume) ==="
 input double           InpHardStopPct      = 10.0;        // daily loss that locks trading
@@ -88,7 +95,13 @@ input group "=== Execution ==="
 input long             InpMagic            = 700911;      // magic number
 input int              InpDeviation        = 20;          // slippage (points)
 input string           InpComment          = "crowcode";  // order comment
-input bool             InpDryRun           = true;        // SAFE DEFAULT: log only, send nothing
+input bool             InpDryRun           = true;        // live only: log, send nothing
+                                                          // (ignored in the Strategy Tester -
+                                                          //  a dry run there means zero trades)
+input double           InpServerGmtOffset  = 0;           // server time - GMT, in hours
+                                                          // Exness is +2 (winter) / +3 (summer).
+                                                          // The tester makes TimeGMT() == server
+                                                          // time, so sessions shift without this.
 input bool             InpVerbose          = true;        // print rejection reasons
 
 //====================================================================
@@ -101,6 +114,13 @@ double         g_point;
 int            g_digits;
 datetime       g_newsTimes[];
 string         g_lastReject   = "";
+bool           g_dryRun       = false;   // always false in the Strategy Tester
+bool           g_isTester     = false;
+
+//--- why we did not trade (printed in OnDeinit)
+string         g_rejectNames[];
+int            g_rejectCounts[];
+int            g_signalCount  = 0;
 
 #define LOCK_DAY_VAR  "CC_LOCK_DAY"
 #define LOCK_PCT_VAR  "CC_LOCK_PCT"
@@ -159,6 +179,10 @@ int OnInit()
    trade.SetTypeFillingBySymbol(g_sym);
    trade.LogLevel(LOG_LEVEL_ERRORS);
 
+   g_isTester = (bool)MQLInfoInteger(MQL_TESTER);
+   //--- A dry run inside the tester means zero trades, which is useless.
+   g_dryRun = InpDryRun && !g_isTester;
+
    ParseNewsTimes(InpNewsTimes);
 
    if(InpSwingLeft < 1 || InpSwingRight < 1)
@@ -172,9 +196,15 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
      }
 
-   if(InpMinSLPrice > 0.0 && InpMaxSLPrice > 0.0 && InpMinSLPrice >= InpMaxSLPrice)
+   if(InpStopMode != STOP_FIXED &&
+      InpMinSLPrice > 0.0 && InpMaxSLPrice > 0.0 && InpMinSLPrice >= InpMaxSLPrice)
      {
       Print("CrowConcept: InpMinSLPrice must be smaller than InpMaxSLPrice");
+      return(INIT_PARAMETERS_INCORRECT);
+     }
+   if(InpStopMode == STOP_FIXED && InpFixedSLPrice <= 0.0)
+     {
+      Print("CrowConcept: STOP_FIXED needs InpFixedSLPrice > 0");
       return(INIT_PARAMETERS_INCORRECT);
      }
    if(InpPartialAtR >= InpTargetRR && InpPartialFraction > 0.0)
@@ -214,7 +244,10 @@ int OnInit()
                   GlobalVariableGet(LOCK_DAY_VAR), GlobalVariableGet(LOCK_PCT_VAR));
      }
 
-   if(InpDryRun)
+   if(g_isTester)
+      PrintFormat("CrowConcept: Strategy Tester - dry run ignored, orders WILL be simulated. "
+                  "stop mode=%s", EnumToString(InpStopMode));
+   else if(g_dryRun)
       Print("CrowConcept: DRY RUN - signals are logged, no orders are sent. "
             "Set InpDryRun=false only after demo testing.");
    else
@@ -227,11 +260,41 @@ int OnInit()
                InpRiskPercent * InpMaxConsecLosses, InpMaxDailyLossPct, InpHardStopPct);
    PrintFormat("CrowConcept ready | %s | HTF=%s MTF=%s LTF=%s | risk=%.2f%% | dry_run=%s",
                g_sym, EnumToString(InpHTF), EnumToString(InpMTF), EnumToString(InpLTF),
-               InpRiskPercent, (InpDryRun ? "true" : "false"));
+               InpRiskPercent, (g_dryRun ? "true" : "false"));
    return(INIT_SUCCEEDED);
   }
 
-void OnDeinit(const int reason) { }
+//+------------------------------------------------------------------+
+//| Why did it not trade? Sorted, so the first line is the real       |
+//| reason. Zero trades with everything under "session" means the GMT |
+//| offset is wrong; under "sizing" means the account is too small.   |
+//+------------------------------------------------------------------+
+void PrintRejectSummary()
+  {
+   int n = ArraySize(g_rejectNames);
+   PrintFormat("=== CrowConcept: %d signals taken ===", g_signalCount);
+   if(n == 0)
+     {
+      Print("  Nothing was even evaluated. Check: chart symbol is gold, "
+            "history is downloaded for HTF/MTF/LTF, algo trading is enabled.");
+      return;
+     }
+   for(int a = 0; a < n - 1; a++)
+      for(int b = a + 1; b < n; b++)
+         if(g_rejectCounts[b] > g_rejectCounts[a])
+           {
+            int    ci = g_rejectCounts[a]; g_rejectCounts[a] = g_rejectCounts[b]; g_rejectCounts[b] = ci;
+            string sn = g_rejectNames[a];  g_rejectNames[a]  = g_rejectNames[b];  g_rejectNames[b]  = sn;
+           }
+   Print("  filter counts (most frequent first):");
+   for(int i = 0; i < n; i++)
+      PrintFormat("    %-16s %d", g_rejectNames[i], g_rejectCounts[i]);
+  }
+
+void OnDeinit(const int reason)
+  {
+   PrintRejectSummary();
+  }
 
 //+------------------------------------------------------------------+
 //| XAUUSD specific startup checks.                                  |
@@ -682,6 +745,19 @@ void ParseNewsTimes(string csv)
       PrintFormat("CrowConcept: %d news blackout window(s) loaded", cnt);
   }
 
+//+------------------------------------------------------------------+
+//| GMT for the session/news filters.                                |
+//| Live: TimeGMT() is correct. Tester: TimeGMT() equals the modeled |
+//| server time, so the London/NY windows land 2-3 hours off unless  |
+//| InpServerGmtOffset is set.                                       |
+//+------------------------------------------------------------------+
+datetime NowGmt()
+  {
+   if(InpServerGmtOffset != 0.0)
+      return(TimeCurrent() - (int)(InpServerGmtOffset * 3600));
+   return(g_isTester ? TimeCurrent() : TimeGMT());
+  }
+
 bool InSession(datetime gmt)
   {
    if(!InpUseSessions)
@@ -889,19 +965,32 @@ double MinStopDistance()
 //====================================================================
 // Setup search
 //====================================================================
+void CountReject(string rule)
+  {
+   for(int i = 0; i < ArraySize(g_rejectNames); i++)
+      if(g_rejectNames[i] == rule)
+        { g_rejectCounts[i]++; return; }
+   int n = ArraySize(g_rejectNames);
+   ArrayResize(g_rejectNames, n + 1);
+   ArrayResize(g_rejectCounts, n + 1);
+   g_rejectNames[n]  = rule;
+   g_rejectCounts[n] = 1;
+  }
+
 void Reject(string rule, string detail)
   {
-   if(!InpVerbose)
-      return;
+   CountReject(rule);
+   if(!InpVerbose || g_isTester)
+      return;                       // the tester gets one summary in OnDeinit instead
    if(rule == g_lastReject)
-      return;                       // only log when the reason changes
+      return;                       // live: log only when the reason changes
    g_lastReject = rule;
    PrintFormat("CrowConcept skip [%s] %s", rule, detail);
   }
 
 void TryNewSetup()
   {
-   datetime gmt = TimeGMT();
+   datetime gmt = NowGmt();
 
    if(!InSession(gmt))            { Reject("session", "outside London/NewYork"); return; }
    if(FridayBlocked(gmt))         { Reject("friday", "late friday - no new entries"); return; }
@@ -1025,27 +1114,40 @@ void TryNewSetup()
    double risk = MathAbs(entry - sl);
    if(risk <= 0.0)                { Reject("rr", "degenerate stop"); return; }
 
-   //--- gold stop guards: an M15 setup with a $40 stop means something went wrong
-   if(InpMinSLPrice > 0.0 && risk < InpMinSLPrice)
+   //--- STOP_FIXED: the stop is a number, not a structure. Always exactly
+   //--- InpFixedSLPrice. This is what "my stop is 20 pips" literally means,
+   //--- and it is the mode that reliably produces trades.
+   if(InpStopMode == STOP_FIXED && InpFixedSLPrice > 0.0)
      {
-      if(InpClampStopToMin)
+      sl = NormalizeDouble((dir == DIR_BULL) ? entry - InpFixedSLPrice
+                                             : entry + InpFixedSLPrice, g_digits);
+      risk = InpFixedSLPrice;
+     }
+   else
+     {
+      //--- structure decides the stop; the guards only accept or reject it
+      if(InpMinSLPrice > 0.0 && risk < InpMinSLPrice)
         {
-         sl = NormalizeDouble((dir == DIR_BULL) ? entry - InpMinSLPrice
-                                                : entry + InpMinSLPrice, g_digits);
-         risk = MathAbs(entry - sl);
-         tp = NormalizeDouble((dir == DIR_BULL) ? entry + risk * InpTargetRR
-                                                : entry - risk * InpTargetRR, g_digits);
-         rr = InpTargetRR;
+         if(InpStopMode == STOP_CLAMP)
+           {
+            sl = NormalizeDouble((dir == DIR_BULL) ? entry - InpMinSLPrice
+                                                   : entry + InpMinSLPrice, g_digits);
+            risk = InpMinSLPrice;
+           }
+         else
+           {
+            Reject("sl_too_tight", StringFormat("stop $%.2f below the $%.2f floor",
+                                                risk, InpMinSLPrice));
+            return;
+           }
         }
-      else
+      if(InpMaxSLPrice > 0.0 && risk > InpMaxSLPrice)
         {
-         Reject("sl_too_tight", StringFormat("stop $%.2f below the $%.2f floor",
-                                             risk, InpMinSLPrice));
+         Reject("sl_too_wide", StringFormat("stop $%.2f above the $%.2f cap",
+                                            risk, InpMaxSLPrice));
          return;
         }
      }
-   if(InpMaxSLPrice > 0.0 && risk > InpMaxSLPrice)
-     { Reject("sl_too_wide", StringFormat("stop $%.2f above the $%.2f cap", risk, InpMaxSLPrice)); return; }
 
    //--- "M1 dies to the spread": price the cost against the stop, not in isolation
    if(InpMaxSpreadRatio > 0.0)
@@ -1058,11 +1160,11 @@ void TryNewSetup()
          return;
         }
      }
+
+   //--- the target always follows the stop actually used, so 1:R holds
    double tp = (dir == DIR_BULL) ? entry + risk * InpTargetRR
                                  : entry - risk * InpTargetRR;
-   double rr = MathAbs(tp - entry) / risk;
-   if(rr + 1e-9 < InpMinRR)
-     { Reject("rr", StringFormat("RR %.2f below minimum", rr)); return; }
+   double rr = InpTargetRR;
 
    entry = NormalizeDouble(entry, g_digits);
    sl    = NormalizeDouble(sl, g_digits);
@@ -1076,11 +1178,12 @@ void TryNewSetup()
    if(lots <= 0.0)                { Reject("sizing", "computed volume below minimum"); return; }
 
    g_lastReject = "";
+   g_signalCount++;
    PrintFormat("CrowConcept SIGNAL %s %s | entry=%.*f sl=%.*f tp=%.*f rr=1:%.1f lots=%.2f zone=%s",
                (dir == DIR_BULL ? "BUY" : "SELL"), (market ? "MARKET" : "LIMIT"),
                g_digits, entry, g_digits, sl, g_digits, tp, rr, lots, z.kind);
 
-   if(InpDryRun)
+   if(g_dryRun)
      {
       Print("CrowConcept: dry run - order not sent");
       return;
@@ -1188,7 +1291,7 @@ bool CircuitBreakerHit(double pnlToday)
 //====================================================================
 string IsoGmt(datetime serverTime)
   {
-   datetime gmt = serverTime - (TimeCurrent() - TimeGMT());
+   datetime gmt = serverTime - (TimeCurrent() - NowGmt());
    MqlDateTime dt;
    TimeToStruct(gmt, dt);
    return(StringFormat("%04d-%02d-%02dT%02d:%02d:%02d+00:00",
@@ -1324,7 +1427,7 @@ void ManageOpenPositions()
          double newSl = NormalizeDouble(isBuy ? entry + buf : entry - buf, g_digits);
          bool forward = (sl == 0.0) || (isBuy ? newSl > sl : newSl < sl);
          bool farEnough = MathAbs(price - newSl) >= MinStopDistance();
-         if(forward && farEnough && !InpDryRun)
+         if(forward && farEnough && !g_dryRun)
            {
             if(trade.PositionModify(ticket, newSl, tp))
                PrintFormat("CrowConcept: %I64u moved to breakeven at %.*f", ticket, g_digits, newSl);
@@ -1339,7 +1442,7 @@ void ManageOpenPositions()
          double vmin = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MIN);
          if(part > 0.0 && rest >= vmin)
            {
-            if(!InpDryRun && trade.PositionClosePartial(ticket, part))
+            if(!g_dryRun && trade.PositionClosePartial(ticket, part))
               {
                GlobalVariableSet(DoneVarName(ticket), 1.0);
                PrintFormat("CrowConcept: %I64u partial close %.2f at %.1fR", ticket, part, r);
@@ -1401,7 +1504,7 @@ void ReviewPendingOrders()
          datetime deadline = setup + InpLimitExpiryBars * PeriodSeconds(InpLTF);
          if(TimeCurrent() >= deadline)
            {
-            if(!InpDryRun && trade.OrderDelete(ticket))
+            if(!g_dryRun && trade.OrderDelete(ticket))
                PrintFormat("CrowConcept: pending %I64u expired", ticket);
             continue;
            }
@@ -1413,7 +1516,7 @@ void ReviewPendingOrders()
          bool broken = isBuy ? (lastClose < osl) : (lastClose > osl);
          if(broken)
            {
-            if(!InpDryRun && trade.OrderDelete(ticket))
+            if(!g_dryRun && trade.OrderDelete(ticket))
                PrintFormat("CrowConcept: pending %I64u cancelled - structure broken", ticket);
            }
         }

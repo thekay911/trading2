@@ -33,7 +33,9 @@ def build(cfg: CrowConfig) -> str:
         # .set 은 MT5 가 읽는 파일이라 주석도 ASCII 로 유지한다 (인코딩 사고 방지)
         f"; stop {lo:g}-{hi:g} pips (${cfg.min_sl_price:g}-${cfg.max_sl_price:g}, "
         f"1 pip = ${cfg.pip_size:g}) | mode {cfg.sl_mode}",
-        "; Load in MT5: EA properties -> Load, then set InpDryRun=true for the first weeks.",
+        "; Load in MT5: EA properties -> Load.",
+        "; InpDryRun=true blocks real orders on a LIVE chart only.",
+        "; The Strategy Tester ignores it, so backtests always place trades.",
         "",
         f"InpHTF={TF_ENUM[cfg.htf]}",
         f"InpMTF={TF_ENUM[cfg.mtf]}",
@@ -52,7 +54,10 @@ def build(cfg: CrowConfig) -> str:
         f"InpLimitExpiryBars={cfg.limit_expiry_bars}",
         f"InpMinSLPrice={round(cfg.min_sl_price, 4)}",
         f"InpMaxSLPrice={round(cfg.max_sl_price, 4)}",
-        f"InpClampStopToMin={'true' if cfg.sl_mode == 'clamp' else 'false'}",
+        # 0=STOP_STRUCTURE 1=STOP_CLAMP 2=STOP_FIXED
+        f"InpStopMode={ {'filter': 0, 'clamp': 1, 'fixed': 2}.get(cfg.sl_mode, 2) }",
+        f"InpFixedSLPrice={round(cfg.min_sl_price, 4)}",
+        "InpServerGmtOffset=0",
         f"InpMaxSpreadRatio={cfg.max_spread_ratio}",
         f"InpRiskPercent={cfg.risk_pct}",
         f"InpMinRR={cfg.min_rr}",

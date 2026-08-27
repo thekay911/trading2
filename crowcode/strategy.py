@@ -189,7 +189,12 @@ class CrowStrategy:
         # 이 프리셋의 것이 아니다 (M5 셋업에 $30 손절이 나오면 뭔가 잘못된 것).
         sl_dist = abs(entry - sl)
 
-        if cfg.min_sl_price and sl_dist < cfg.min_sl_price:
+        if cfg.sl_mode == "fixed" and cfg.min_sl_price:
+            # 손절을 '숫자' 로 쓴다. 구조가 만든 자리 대신 항상 같은 폭.
+            sl_dist = cfg.min_sl_price
+            sl = entry - sl_dist if side == "buy" else entry + sl_dist
+            ctx.reasons.append(f"고정 손절 {cfg.price_to_pips(sl_dist):g}핍")
+        elif cfg.min_sl_price and sl_dist < cfg.min_sl_price:
             if cfg.sl_mode == "clamp":
                 # 넓히는 쪽은 안전하다 — 구조 바깥으로 더 여유를 주는 것뿐이다.
                 sl = entry - cfg.min_sl_price if side == "buy" else entry + cfg.min_sl_price
@@ -199,7 +204,7 @@ class CrowStrategy:
                 return self._reject(now.ts, "sl_too_tight",
                                     f"손절 폭 {sl_dist:.2f} < 최소 {cfg.min_sl_price}")
 
-        if cfg.max_sl_price and sl_dist > cfg.max_sl_price:
+        if cfg.sl_mode != "fixed" and cfg.max_sl_price and sl_dist > cfg.max_sl_price:
             # clamp 여도 좁히지는 않는다. 구조가 요구하는 자리보다 안쪽에
             # 손절을 두면 '맞으러 가는 자리' 가 된다.
             return self._reject(now.ts, "sl_too_wide",
