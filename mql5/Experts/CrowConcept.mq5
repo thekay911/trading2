@@ -79,7 +79,7 @@ input double           InpPartialFraction  = 0.5;         // fraction closed
 input int              InpMaxTradesPerDay  = 6;           // hard cap
 input int              InpMaxConsecLosses  = 2;           // stop the day after N losses
 input double           InpMaxDailyLossPct  = 6.0;         // stop the day at this drawdown
-input int              InpBeBufferPoints   = 10;          // breakeven buffer (points)
+input double           InpBeBufferPrice    = 0.10;        // breakeven buffer in PRICE ($0.10)
 
 input group "=== Filters ==="
 input bool             InpUseSessions      = true;        // trade only listed sessions
@@ -92,7 +92,11 @@ input double           InpFridayCutoff     = 19.0;        // GMT hour
 input string           InpNewsTimes        = "";          // "2024.02.02 13:30;..." (GMT)
 input int              InpNewsBeforeMin    = 15;          // blackout before news
 input int              InpNewsAfterMin     = 30;          // blackout after news
-input int              InpMaxSpreadPoints  = 60;          // skip when spread is wider
+input double           InpMaxSpreadPrice   = 0.60;        // skip when spread is wider, in PRICE
+                                                          // Points would break on a 3-digit gold
+                                                          // feed: $0.30 = 30 points at 2 digits
+                                                          // but 300 at 3, so a points cap kills
+                                                          // every trade on some brokers.
 
 input group "=== Circuit breaker (stop, review, then resume) ==="
 input double           InpHardStopPct      = 10.0;        // daily loss that locks trading
@@ -112,6 +116,14 @@ input double           InpServerGmtOffset  = 0;           // server time - GMT, 
                                                           // The tester makes TimeGMT() == server
                                                           // time, so sessions shift without this.
 input bool             InpVerbose          = true;        // print rejection reasons
+input int              InpDiagEveryBars    = 20000;       // print the filter tally every N bars
+                                                          // (0 = only at the end)
+input bool             InpLooseTest        = false;       // DIAGNOSTIC: drop the optional filters
+                                                          // (sessions, sweep, CHOCH) so the EA
+                                                          // definitely trades. Use it once to
+                                                          // prove the plumbing works, then turn
+                                                          // it off and tighten one filter at a
+                                                          // time. NOT a trading setting.
 
 //====================================================================
 // Globals
@@ -130,6 +142,7 @@ bool           g_isTester     = false;
 string         g_rejectNames[];
 int            g_rejectCounts[];
 int            g_signalCount  = 0;
+long           g_evalBars     = 0;
 
 #define LOCK_DAY_VAR  "CC_LOCK_DAY"
 #define LOCK_PCT_VAR  "CC_LOCK_PCT"
@@ -236,6 +249,17 @@ int OnInit()
                   "- the first loss would end the day",
                   InpMaxDailyLossPct, InpRiskPercent);
 
+   PrintFormat("CrowConcept spec | %s digits=%d point=%g tick_size=%g tick_value=%g "
+               "contract=%g stops_level=%d spread_now=%d pts ($%.2f) min_lot=%g",
+               g_sym, g_digits, g_point,
+               SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_SIZE),
+               SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_VALUE),
+               SymbolInfoDouble(g_sym, SYMBOL_TRADE_CONTRACT_SIZE),
+               (int)SymbolInfoInteger(g_sym, SYMBOL_TRADE_STOPS_LEVEL),
+               (int)SymbolInfoInteger(g_sym, SYMBOL_SPREAD),
+               SymbolInfoInteger(g_sym, SYMBOL_SPREAD) * g_point,
+               SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MIN));
+
    GoldSanityCheck();
 
    if(InpUnlock)
@@ -253,6 +277,9 @@ int OnInit()
                   GlobalVariableGet(LOCK_DAY_VAR), GlobalVariableGet(LOCK_PCT_VAR));
      }
 
+   if(InpLooseTest)
+      Print("CrowConcept: *** LOOSE TEST MODE *** sessions / sweep / CHOCH are OFF. "
+            "This is for proving the EA trades at all - turn it off before judging results.");
    if(g_isTester)
       PrintFormat("CrowConcept: Strategy Tester - dry run ignored, orders WILL be simulated. "
                   "stop mode=%s", EnumToString(InpStopMode));
@@ -278,6 +305,32 @@ int OnInit()
 //| reason. Zero trades with everything under "session" means the GMT |
 //| offset is wrong; under "sizing" means the account is too small.   |
 //+------------------------------------------------------------------+
+//--- what to change when one filter dominates
+string RejectAdvice(string rule)
+  {
+   if(rule == "session")       return("sessions are in GMT; in the tester TimeGMT()==server time. "
+                                      "Set InpServerGmtOffset (Exness +2 winter / +3 summer), "
+                                      "or set InpUseSessions=false to test around the clock.");
+   if(rule == "spread")        return("raise InpMaxSpreadPrice (it is in DOLLARS, not points).");
+   if(rule == "spread_ratio")  return("raise InpMaxSpreadRatio, or widen InpFixedSLPrice.");
+   if(rule == "sizing")        return("balance too small for the stop, or leverage too low. "
+                                      "Check the 'spec' line at startup.");
+   if(rule == "stops_level")   return("broker minimum stop distance is wider than your stop. "
+                                      "Widen InpFixedSLPrice.");
+   if(rule == "data")          return("not enough history. Download M1/M5/M15 bars for the symbol.");
+   if(rule == "htf_bias")      return("HTF gave no direction. Lower InpHtfBars or use a lower HTF.");
+   if(rule == "mtf_conflict")  return("MTF disagreed with HTF. Normal, but if it dominates the "
+                                      "timeframes are too far apart.");
+   if(rule == "sweep")         return("no liquidity sweep found. Set InpRequireSweep=false to test.");
+   if(rule == "choch")         return("no CHOCH after the sweep. Set InpRequireChoch=false to test, "
+                                      "or raise InpSweepLookback.");
+   if(rule == "distance")      return("the zone sits too far from price. Raise InpMaxEntryDistATR.");
+   if(rule == "poi")           return("no valid order block / FVG. Raise InpMtfBars.");
+   if(rule == "locked")        return("circuit breaker. Re-attach with InpUnlock=true.");
+   if(rule == "risk_gate")     return("daily limits. Raise InpMaxTradesPerDay / InpMaxDailyLossPct.");
+   return("check the code path for this rule.");
+  }
+
 void PrintRejectSummary()
   {
    int n = ArraySize(g_rejectNames);
@@ -298,6 +351,10 @@ void PrintRejectSummary()
    Print("  filter counts (most frequent first):");
    for(int i = 0; i < n; i++)
       PrintFormat("    %-16s %d", g_rejectNames[i], g_rejectCounts[i]);
+
+   if(g_signalCount == 0)
+      PrintFormat("  ZERO TRADES. The top filter is '%s' - fix that one: %s",
+                  g_rejectNames[0], RejectAdvice(g_rejectNames[0]));
   }
 
 void OnDeinit(const int reason)
@@ -338,14 +395,13 @@ void GoldSanityCheck()
                   stopDist, InpMinSLPrice);
 
    //--- typical spread vs the tightest stop
-   long spread = SymbolInfoInteger(g_sym, SYMBOL_SPREAD);
+   double spreadNow = SymbolInfoInteger(g_sym, SYMBOL_SPREAD) * g_point;
    if(InpMaxSpreadRatio > 0.0 && InpMinSLPrice > 0.0)
      {
       double allowed = InpMinSLPrice * InpMaxSpreadRatio;
-      if(spread * g_point > allowed)
+      if(spreadNow > allowed)
          PrintFormat("CrowConcept NOTE: spread $%.2f exceeds $%.2f allowed for the tightest "
-                     "setup - narrow-stop signals will be filtered out.",
-                     spread * g_point, allowed);
+                     "setup - narrow-stop signals will be filtered out.", spreadNow, allowed);
      }
   }
 
@@ -360,6 +416,11 @@ void OnTick()
    if(barTime == g_lastBarTime)
       return;                       // evaluate once per closed LTF bar
    g_lastBarTime = barTime;
+
+   //--- periodic diagnosis so a silent EA is never a mystery
+   g_evalBars++;
+   if(InpDiagEveryBars > 0 && (g_evalBars % InpDiagEveryBars) == 0)
+      PrintRejectSummary();
 
    ReviewPendingOrders();
 
@@ -1001,7 +1062,8 @@ void TryNewSetup()
   {
    datetime gmt = NowGmt();
 
-   if(!InSession(gmt))            { Reject("session", "outside London/NewYork"); return; }
+   if(!InpLooseTest && !InSession(gmt))
+     { Reject("session", "outside London/NewYork"); return; }
    if(FridayBlocked(gmt))         { Reject("friday", "late friday - no new entries"); return; }
    if(InNewsBlackout(gmt))        { Reject("news", "high impact news window"); return; }
 
@@ -1020,9 +1082,14 @@ void TryNewSetup()
    string why;
    if(!RiskGateOpen(why))         { Reject("risk_gate", why); return; }
 
-   long spread = SymbolInfoInteger(g_sym, SYMBOL_SPREAD);
-   if(spread > InpMaxSpreadPoints)
-     { Reject("spread", StringFormat("spread %d pts too wide", (int)spread)); return; }
+   double spreadPrice = SymbolInfoDouble(g_sym, SYMBOL_ASK) - SymbolInfoDouble(g_sym, SYMBOL_BID);
+   if(spreadPrice <= 0.0)
+      spreadPrice = SymbolInfoInteger(g_sym, SYMBOL_SPREAD) * g_point;
+   if(InpMaxSpreadPrice > 0.0 && spreadPrice > InpMaxSpreadPrice)
+     {
+      Reject("spread", StringFormat("spread $%.2f > $%.2f", spreadPrice, InpMaxSpreadPrice));
+      return;
+     }
 
    MqlRates htf[], mtf[], ltf[];
    if(!LoadRates(InpHTF, InpHtfBars, htf) ||
@@ -1057,13 +1124,13 @@ void TryNewSetup()
    //--- 3) LTF trigger: sweep first, then CHOCH
    Sweep sweep;
    sweep.idx = -1;
-   if(InpRequireSweep)
+   if(InpRequireSweep && !InpLooseTest)
      {
       if(!FindLastSweep(ltf, dir, sweep))
         { Reject("sweep", "opposing liquidity not swept"); return; }
      }
 
-   if(InpRequireChoch)
+   if(InpRequireChoch && !InpLooseTest)
      {
       BreakEvent ltfEvents[];
       AnalyseStructure(ltf, ltfEvents);
@@ -1080,7 +1147,7 @@ void TryNewSetup()
       if(chochIdx < 0)            { Reject("choch", "no CHOCH on LTF"); return; }
       if(sweep.idx >= 0 && chochIdx < sweep.idx)
         { Reject("choch", "CHOCH happened before the sweep"); return; }
-      if((ArraySize(ltf) - 1 - chochIdx) > InpSweepLookback / 2)
+      if((ArraySize(ltf) - 1 - chochIdx) > InpSweepLookback)
         { Reject("choch", "CHOCH is stale"); return; }
      }
 
@@ -1102,8 +1169,17 @@ void TryNewSetup()
 
    //--- limit goes on the proximal edge of the zone
    double entry = market ? ref : ((dir == DIR_BULL) ? z.top : z.bottom);
-   if(!market && MathAbs(entry - ref) > InpMaxEntryDistATR * ltfAtr)
-     { Reject("distance", "zone too far - waiting for the pullback"); return; }
+   //--- the zone came from the MTF, so its distance must be judged on the MTF's
+   //--- own scale. M1 ATR is a few cents on gold and rejects almost everything.
+   double zoneAtr = AverageTrueRange(mtf, 14);
+   if(zoneAtr <= 0.0)
+      zoneAtr = ltfAtr;
+   if(!market && MathAbs(entry - ref) > InpMaxEntryDistATR * zoneAtr)
+     {
+      Reject("distance", StringFormat("zone $%.2f away, limit $%.2f",
+                                      MathAbs(entry - ref), InpMaxEntryDistATR * zoneAtr));
+      return;
+     }
 
    double buffer = ltfAtr * InpSlBufferATR;
    double sl;
@@ -1432,7 +1508,7 @@ void ManageOpenPositions()
       //--- 2R: move stop to breakeven (never backwards)
       if(r >= InpBreakevenAtR)
         {
-         double buf   = InpBeBufferPoints * g_point;
+         double buf   = InpBeBufferPrice;
          double newSl = NormalizeDouble(isBuy ? entry + buf : entry - buf, g_digits);
          bool forward = (sl == 0.0) || (isBuy ? newSl > sl : newSl < sl);
          bool farEnough = MathAbs(price - newSl) >= MinStopDistance();

@@ -56,3 +56,21 @@ class TestFriday(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNoSessionFilter(unittest.TestCase):
+    """세션 목록이 비면 '필터 없음' 이어야 한다. 정반대로 읽으면 전부 막힌다."""
+
+    def test_empty_window_list_means_no_filter(self):
+        from crowcode.config import preset
+        from crowcode.data import synthetic
+        from crowcode.strategy import CrowStrategy
+
+        series = synthetic(6000)
+        cfg = preset("intraday").with_(sessions=())
+        st = CrowStrategy(cfg, "XAUUSD")
+        view = st.view(series)
+        for i in range(800, len(series), 7):
+            st.evaluate(view, 5000.0, None, now_ts=series[i].ts)
+        self.assertNotIn("session", st.rejection_summary(),
+                         "세션 목록이 비었는데도 세션으로 기각하고 있다")

@@ -84,10 +84,13 @@ class CrowStrategy:
         self.last_context = ctx
 
         # --- 0) 게이트 -------------------------------------------------
-        sess = in_session(now.ts, cfg.sessions)
-        if sess is None:
-            return self._reject(now.ts, "session", "거래 세션 밖 (유럽·미국 세션만)")
-        ctx.reasons.append(f"세션: {sess.name}")
+        # 세션 목록이 비어 있으면 '필터 없음' 이다. 이걸 '아무 세션에도
+        # 속하지 않음' 으로 읽으면 정반대로 전부 차단된다.
+        if cfg.sessions:
+            sess = in_session(now.ts, cfg.sessions)
+            if sess is None:
+                return self._reject(now.ts, "session", "거래 세션 밖 (유럽·미국 세션만)")
+            ctx.reasons.append(f"세션: {sess.name}")
 
         if not cfg.trade_on_friday_close and friday_close_block(now.ts):
             return self._reject(now.ts, "friday", "금요일 마감 직전 신규 진입 금지")
