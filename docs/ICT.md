@@ -74,12 +74,24 @@ python3 -m ict study --csv XAUUSD_M5.csv --since 2018-01-01
 2018년부터의 M5 데이터가 필요하다. **회원님 MT5 에서 직접 받아야 한다** —
 이 저장소에서 접근 가능한 무료 소스는 전부 막혀 있다.
 
-### 받는 법
+### 받는 법 1 — MT5 (권장, 2018년부터 가능)
 
-1. MT5 → **도구 → 옵션 → 차트** → "차트의 최대 바" 를 `무제한` 으로
-2. XAUUSD **M5 차트** 열고 `Home` 키를 계속 눌러 2018년까지 스크롤
-   (또는 **도구 → 자료실(F2)** → XAUUSD → M5 → `다운로드`)
-3. **파일 → 데이터 내보내기** → CSV 저장
+MT5 → 도구 → 퀀트 데이터 / 심볼 → XAUUSD → M5 → 내보내기,
+그 뒤 `python3 tools/mt5_to_csv.py --server-offset 2` (엑스네스는 2 또는 3).
+
+### 받는 법 2 — 바로 받기 (최근 구간만)
+
+MT5 내보내기가 번거로우면 이걸로 즉시 실측할 수 있다.
+
+```bash
+python3 tools/fetch_gold.py --interval 5m --out gold_m5.csv   # 최근 60일
+python3 tools/fetch_gold.py --interval 1h --out gold_h1.csv   # 최근 730일
+python3 -m ict study --csv gold_m5.csv
+```
+
+COMEX 금 선물(GC=F)이다. **XAUUSD 현물이 아니다** — 선물은 보유비용만큼
+현물보다 비싸다. 세션·구조·변동성 패턴은 사실상 같이 움직이므로 개념
+검증에는 쓸 만하지만, 절대가격과 스프레드는 브로커 값과 다르다.
 
 ### 형식
 
