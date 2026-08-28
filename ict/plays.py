@@ -100,14 +100,14 @@ class Play:
 PLAYS: dict[str, Play] = {
     "Unicorn": Play(
         "Unicorn", target_rr=4.0, max_hold=96, be_at=0.0, risk_pct=2.0,
-        enabled=False, trades=1939, expectancy=0.297,
+        enabled=True, trades=1939, expectancy=0.297,
         why="유일하게 6개 구간 전부 양수고, 최근 구간(2024~)이 +0.39R 로 가장 좋다. "
             "M30 +0.317R / M15 +0.297R 로 시간대도 안 탄다. 매수 +0.326R / "
             "매도 +0.316R 로 대칭. 브레이커와 FVG 가 겹치는 자리 — 두 근거가 "
             "같은 가격에서 만나는 곳만 잡으니 셋업이 적고 질이 높다."),
     "TurtleSoup": Play(
         "TurtleSoup", target_rr=4.0, max_hold=96, be_at=0.0, risk_pct=2.0,
-        enabled=False, trades=2954, expectancy=0.122,
+        enabled=True, trades=2954, expectancy=0.122,
         why="표본이 가장 두껍다(M15 2,954 / M30 3,609거래). 6개 구간 중 5개 양수, "
             "음수인 2012~2015 도 -0.04R 로 얕다. 두 시간대 격자 모양이 같다: "
             "2.5R 위로 양수, 짧게 자르면 음수 — 가짜 돌파가 풀리면 반대편까지 간다."),
@@ -154,7 +154,7 @@ PLAYS: dict[str, Play] = {
 #:     손절 >= 1.0xATR    -27.9R
 #:     손절 >= 3.0xATR     +8.9R  (+0.005R = 잡음)
 #: 우위가 확인된 모델이 없으므로 기본 실행 목록은 비운다.
-ACTIVE = [n for n, p in PLAYS.items() if p.enabled]      # 지금은 비어 있다
+ACTIVE = [n for n, p in PLAYS.items() if p.enabled]
 
 #: 이 계획들을 뽑아낸 표본
 SAMPLE = ("XAUUSD 2004-06-11 ~ 2026-01-30 · M30 248,912봉(셋업 8,241) + "

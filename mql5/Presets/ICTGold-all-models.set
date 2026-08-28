@@ -1,4 +1,4 @@
-; Everything on - for inspection, not for trading
+; Everything on - for inspection
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=true
@@ -36,6 +36,7 @@ InpStopBufferBP=1.5
 InpMaxEntryDistATR=3.0
 InpMaxSpreadToStop=0.15
 InpMinStopPrice=1.00
+InpMinStopATR=3.0
 InpMaxLots=1.00
 InpMaxRiskPctHard=3.0
 InpSpreadFloorBP=0.55

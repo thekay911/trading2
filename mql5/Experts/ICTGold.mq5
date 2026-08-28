@@ -17,8 +17,21 @@
 //|  *     stop >= 1.0x ATR   -27.9R                                *|
 //|  *     stop >= 3.0x ATR    +8.9R  (+0.005R/trade = noise)       *|
 //|  *                                                              *|
-//|  *  All models therefore ship DISABLED. Turning one on is a     *|
-//|  *  decision to trade something that has not been shown to work.*|
+//|  *  Unicorn and TurtleSoup are ON because they were asked for,  *|
+//|  *  not because they were shown to work. The settings are the    *|
+//|  *  least-bad region of a 20-cell grid, chosen for STABILITY     *|
+//|  *  rather than for the highest cell:                            *|
+//|  *                                                               *|
+//|  *    stop >= 3.0x ATR, every target from 1.5R to 6R:            *|
+//|  *      -0.016 / +0.006 / +0.001 / +0.005 / +0.014 R per trade   *|
+//|  *      drawdown 44-88R   <- consistent, smallest drawdowns      *|
+//|  *                                                               *|
+//|  *    The single best cell was 1.0x ATR / 6R at +0.024R, but its *|
+//|  *    neighbours were -0.050 -0.040 -0.043 -0.016. A spike, not  *|
+//|  *    an edge. Picking that cell is the mistake that produced    *|
+//|  *    every wrong number this EA has reported so far.            *|
+//|  *                                                               *|
+//|  *  Expect roughly break-even minus costs. Demo only.            *|
 //|  ****************************************************************|
 //|                                                                  |
 //|   Measured on real XAUUSD 2004-06 to 2026-01, on TWO timeframes  |
@@ -64,9 +77,9 @@
 // Inputs
 //====================================================================
 input group "=== Models (each has its own plan) ==="
-input bool   InpUseUnicorn      = false;    // ON: only model positive in all six eras
+input bool   InpUseUnicorn      = true;    // ON by request - read the header first
 input bool   InpUseJudasSwing   = false;   // OFF: positive on M30, negative on M15
-input bool   InpUseTurtleSoup   = false;    // ON: positive in five of six eras
+input bool   InpUseTurtleSoup   = true;    // ON by request - read the header first
 input bool   InpUseOTE          = false;   // OFF: sign flips between timeframes
 input bool   InpUseTJR          = false;   // OFF: edge decays in the last three eras
 
@@ -114,6 +127,7 @@ input double InpMaxEntryDistATR = 3.0;     // skip limits further than this from
 input group "=== Execution guards ==="
 input double InpMaxSpreadToStop = 0.15;    // skip if spread > this fraction of the stop
 input double InpMinStopPrice    = 1.00;    // HARD floor on stop distance, in dollars
+input double InpMinStopATR      = 3.0;     // widen any stop narrower than this many ATR
 input double InpMaxLots         = 1.00;    // HARD cap on position size
 input double InpMaxRiskPctHard   = 3.0;    // refuse any order risking more than this
 input double InpSpreadFloorBP   = 0.55;    // assumed spread as bp of price, for the stop check
@@ -573,6 +587,20 @@ bool Finish(Setup &s, int now, double targetRR, double riskPct,
 {
    double risk = MathAbs(s.entry - s.stop);
    if(risk <= 0) return false;
+
+   // Widen a stop that sits inside the noise. 96% of these setups came
+   // out under 1x ATR - on gold that means entry and stop both live
+   // inside one candle, and the candle decides, not the setup.
+   double atrNow = AtrAt(now);
+   if(InpMinStopATR > 0 && atrNow > 0)
+   {
+      double floorStop = atrNow * InpMinStopATR;
+      if(risk < floorStop)
+      {
+         s.stop = s.isBuy ? s.entry - floorStop : s.entry + floorStop;
+         risk = floorStop;
+      }
+   }
 
    // The live spread can be unrealistically tight in a tester run on
    // low-quality history. Use at least the modelled bp spread so the
@@ -1323,8 +1351,7 @@ int OnInit()
    if(!InpUseUnicorn && !InpUseJudasSwing && !InpUseTurtleSoup
       && !InpUseTJR && !InpUseOTE)
    {
-      Print("All models are off. None of them has a measured edge -");
-      Print("see the header. Nothing will be traded until you turn one on.");
+      Print("All models are off. Nothing will be traded.");
    }
    PrintFormat("ICTGold on %s %s | Unicorn %s  Judas %s  Turtle %s  TJR %s  OTE %s",
                g_sym, EnumToString((ENUM_TIMEFRAMES)Period()),

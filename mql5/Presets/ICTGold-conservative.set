@@ -1,8 +1,8 @@
-; If you turn a model on anyway: 1% risk, 2 a day
+; 1% risk, 2 a day
 ; ICTGold.mq5 preset
-InpUseUnicorn=false
+InpUseUnicorn=true
 InpUseJudasSwing=false
-InpUseTurtleSoup=false
+InpUseTurtleSoup=true
 InpUseOTE=false
 InpUseTJR=false
 InpUNI_TargetRR=4.0
@@ -36,6 +36,7 @@ InpStopBufferBP=1.5
 InpMaxEntryDistATR=3.0
 InpMaxSpreadToStop=0.15
 InpMinStopPrice=1.00
+InpMinStopATR=3.0
 InpMaxLots=0.50
 InpMaxRiskPctHard=3.0
 InpSpreadFloorBP=0.55

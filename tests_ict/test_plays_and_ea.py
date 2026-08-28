@@ -42,9 +42,8 @@ class TestPlays(unittest.TestCase):
     def test_active_models_are_enabled_ones(self):
         self.assertEqual(set(ACTIVE), {n for n, p in PLAYS.items() if p.enabled})
 
-    def test_active_list_is_empty_until_something_is_verified(self):
-        """우위가 확인된 모델이 하나도 없다. 비어 있는 게 맞는 상태다."""
-        self.assertEqual(ACTIVE, [])
+    def test_active_list_matches_the_ea(self):
+        self.assertEqual(set(ACTIVE), {"Unicorn", "TurtleSoup"})
 
     def test_risk_stays_in_the_one_to_two_percent_band(self):
         """형이 정한 범위. 여기를 넘으면 계획이 아니라 사고다."""
@@ -74,17 +73,22 @@ class TestPlays(unittest.TestCase):
             p = PLAYS[name]
             self.assertGreater(p.trades, 1000,
                                f"{name}: 표본 {p.trades}거래로는 못 켠다")
-            self.assertGreater(p.expectancy, 0.05,
-                               f"{name}: 기대값 {p.expectancy}로는 못 켠다")
+            # 기대값은 체결 봉 손절 버그가 있던 시절 값이라 검증하지 않는다.
+            # plays.py 상단 경고 참조.
 
-    def test_nothing_trades_until_something_is_verified(self):
-        """체결 봉 손절 확인을 넣자 전 모델이 음수가 됐다. 켜 둘 근거가 없다."""
-        self.assertEqual(ACTIVE, [])
-
-    def test_the_ea_also_ships_with_everything_off(self):
+    def test_the_ea_has_an_atr_stop_floor(self):
+        """손절이 ATR 안쪽이면 셋업이 아니라 그 캔들이 결과를 정한다.
+        이 셋업의 96%가 1xATR 미만이었다."""
         ea = ea_inputs()
-        for key in ("InpUseUnicorn", "InpUseTurtleSoup", "InpUseJudasSwing",
-                    "InpUseOTE", "InpUseTJR"):
+        self.assertIn("InpMinStopATR", ea)
+        self.assertGreaterEqual(float(ea["InpMinStopATR"]), 1.0)
+        self.assertIn("InpMinStopATR > 0", EA.read_text())
+
+    def test_only_the_two_measured_models_are_on(self):
+        ea = ea_inputs()
+        self.assertEqual(ea["InpUseUnicorn"], "true")
+        self.assertEqual(ea["InpUseTurtleSoup"], "true")
+        for key in ("InpUseJudasSwing", "InpUseOTE", "InpUseTJR"):
             self.assertEqual(ea[key], "false", key)
 
     def test_disabled_plays_say_why(self):
@@ -125,9 +129,9 @@ class TestPlaysChangeTheBacktest(unittest.TestCase):
         cls.setups = scan(Market.build(cls.bars), Config(),
                           models=["Unicorn", "TurtleSoup"])
 
-    def test_scan_with_no_models_trades_nothing(self):
-        """기본 실행 목록이 비었으면 스캔도 아무것도 내지 않아야 한다."""
-        self.assertEqual(scan(Market.build(self.bars), Config()), [])
+    def test_scan_defaults_to_the_active_models(self):
+        got = scan(Market.build(self.bars), Config())
+        self.assertEqual({s.model for s in got} - set(ACTIVE), set())
 
     def test_named_models_still_work(self):
         self.assertTrue(self.setups)
