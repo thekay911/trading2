@@ -1,4 +1,4 @@
-; Unicorn + TurtleSoup, stop >= 3x ATR, 4R, 8h limit expiry
+; Unicorn + TurtleSoup, 3x ATR stop, VA gate on
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -49,6 +49,8 @@ InpRequireKillzone=true
 InpRequireContext=true
 InpCooldownBars=12
 InpContextLookback=40
+InpRequireValidVA=true
+InpVaBucketDiv=4
 InpMinRR=2.0
 InpServerGmtOffset=2
 InpAutoDetectOffset=true

@@ -390,3 +390,37 @@ class TestBacktesterIsHonest(unittest.TestCase):
         self.assertEqual(r.trades[0].outcome, "stop",
                          "체결 봉의 손절을 놓쳤다 — 좁은 손절이 공짜로 통과한다")
         self.assertLess(r.trades[0].r, 0)
+
+
+class TestValueAreaGate(unittest.TestCase):
+    """자료(TPO)에서 유일하게 실측을 통과한 규칙이 EA 에 들어갔는가."""
+
+    def test_the_gate_exists_and_is_on(self):
+        ea = ea_inputs()
+        self.assertIn("InpRequireValidVA", ea)
+        self.assertEqual(ea["InpRequireValidVA"], "true")
+
+    def test_the_ea_computes_a_value_area(self):
+        src = EA.read_text()
+        self.assertIn("LastSessionClosedInsideVA", src)
+        self.assertIn("0.70", src, "VA 는 전체 TPO 의 70% 구간이다")
+
+    def test_unknown_history_does_not_block(self):
+        """앞 세션을 못 찾으면 막지 않는다 — 모르는 것과 나쁜 것은 다르다."""
+        src = EA.read_text()
+        i = src.index("bool LastSessionClosedInsideVA")
+        body = src[i:src.index("//====", i + 10)]
+        self.assertIn("return true;  // unknown: do not block", body)
+
+    def test_python_side_can_compute_the_same_thing(self):
+        from tpo.profile import build
+        from tpo.sessions import split
+        from ict.sample import gold
+        bars = list(gold(days=6, seed=3))
+        ses = split(bars)
+        self.assertTrue(ses)
+        p = build(ses[0].bars, tick=1.0)
+        lo, hi = p.value_area()
+        self.assertLessEqual(lo, p.poc)
+        self.assertGreaterEqual(hi, p.poc)
+        self.assertEqual(p.close_outside_va(), not (lo <= p.close <= hi))

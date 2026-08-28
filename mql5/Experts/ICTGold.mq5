@@ -31,6 +31,13 @@
 //|  *    an edge. Picking that cell is the mistake that produced    *|
 //|  *    every wrong number this EA has reported so far.            *|
 //|  *                                                               *|
+//|  *  A value-area gate from the Market Profile material is now on:*|
+//|  *    last session closed INSIDE its VA   +0.024R  drawdown 27R  *|
+//|  *    last session closed OUTSIDE its VA  -0.018R  drawdown 48R  *|
+//|  *  Same setups, opposite sign. Skipping the bad half is the     *|
+//|  *  only thing from all the study material that measurably       *|
+//|  *  helped. Everything else in it came out at the base rate.     *|
+//|  *                                                               *|
 //|  *  Expect roughly break-even minus costs. Demo only.            *|
 //|  ****************************************************************|
 //|                                                                  |
@@ -142,6 +149,8 @@ input bool   InpRequireKillzone = true;    // only London / NY AM / Silver Bulle
 input bool   InpRequireContext  = true;    // skip Expansion: never chase a move already gone
 input int    InpCooldownBars    = 12;      // bars before the same model may fire again
 input int    InpContextLookback = 40;      // bars used to judge the context range
+input bool   InpRequireValidVA  = true;    // skip if the last session closed outside its own value area
+input int    InpVaBucketDiv     = 4;       // price bucket = ATR / this, for the session profile
 input double InpMinRR           = 2.0;     // reject a setup whose target is nearer than this
 
 input group "=== Session (New York clock, DST handled) ==="
@@ -554,6 +563,112 @@ int MarketContext(int now, double &rngHigh, double &rngLow)
    if(tookHigh && C[now] < eq) return 2;             // Reversal
    if(tookLow  && C[now] > eq) return 2;
    return 3;                                          // Retracement
+}
+
+
+//====================================================================
+// Session value area (Market Profile / TPO).
+//
+// From the source material: if a session CLOSES OUTSIDE its own value
+// area, that value area was never a real agreement on price - the
+// auction did not finish there.
+//
+// Measured on XAUUSD M15 2004-2026, on this EA's own setups:
+//    previous session closed INSIDE its VA   +0.024R  drawdown 27R
+//    previous session closed OUTSIDE its VA  -0.018R  drawdown 48R
+// Same setups, opposite sign. Skipping the second half roughly halves
+// the drawdown, which is why this gate is on by default.
+//====================================================================
+#define VA_MAX_BUCKETS 400
+
+//--- New York session index: 0 Asia, 1 Europe, 2 CME, -1 none
+int SessionOf(datetime server)
+{
+   double h = NyHour(server);
+   if(h >= 20.0 || h < 2.0)  return 0;
+   if(h >= 2.0  && h < 8.0)  return 1;
+   if(h >= 8.0  && h < 17.0) return 2;
+   return -1;
+}
+
+//--- Did the most recently COMPLETED session close inside its value area?
+bool LastSessionClosedInsideVA(int now)
+{
+   int cur = SessionOf(T[now]);
+   int endIdx = -1, startIdx = -1, prev = -1;
+
+   // walk back to the end of the previous session
+   for(int k = now - 1; k > 0; k--)
+   {
+      int sx = SessionOf(T[k]);
+      if(sx < 0) continue;
+      if(endIdx < 0)
+      {
+         if(sx != cur) { endIdx = k; prev = sx; }
+         continue;
+      }
+      if(sx != prev) { startIdx = k + 1; break; }
+   }
+   if(endIdx < 0 || startIdx < 0 || endIdx - startIdx < 4) return true;  // unknown: do not block
+
+   double atr = AtrAt(endIdx);
+   if(atr <= 0) return true;
+   double bucket = atr / (double)MathMax(1, InpVaBucketDiv);
+   if(bucket <= 0) return true;
+
+   double lo = L[startIdx], hi = H[startIdx];
+   for(int k = startIdx; k <= endIdx; k++)
+   {
+      if(H[k] > hi) hi = H[k];
+      if(L[k] < lo) lo = L[k];
+   }
+   int nb = (int)MathFloor((hi - lo) / bucket) + 1;
+   if(nb < 3 || nb > VA_MAX_BUCKETS) return true;
+
+   int counts[VA_MAX_BUCKETS];
+   ArrayInitialize(counts, 0);
+
+   // one TPO per 30-minute bracket per price bucket it touched
+   int perBracket = (int)MathMax(1, 30 / MathMax(1, PeriodSeconds(PERIOD_CURRENT) / 60));
+   int lastBracket = -1;
+   for(int k = startIdx; k <= endIdx; k++)
+   {
+      int br = (k - startIdx) / perBracket;
+      int b0 = (int)MathFloor((L[k] - lo) / bucket);
+      int b1 = (int)MathFloor((H[k] - lo) / bucket);
+      for(int b = b0; b <= b1 && b < nb; b++)
+      {
+         if(b < 0) continue;
+         // avoid double-counting the same bracket in the same bucket
+         if(br == lastBracket && k > startIdx && b0 == b1) continue;
+         counts[b]++;
+      }
+      lastBracket = br;
+   }
+
+   int total = 0, poc = 0;
+   for(int b = 0; b < nb; b++)
+   {
+      total += counts[b];
+      if(counts[b] > counts[poc]) poc = b;
+   }
+   if(total <= 0) return true;
+
+   // widen from the POC until 70% of the TPOs are covered
+   int loB = poc, hiB = poc, got = counts[poc];
+   double target = total * 0.70;
+   while(got < target && (loB > 0 || hiB < nb - 1))
+   {
+      int up = (hiB < nb - 1) ? counts[hiB + 1] : -1;
+      int dn = (loB > 0)      ? counts[loB - 1] : -1;
+      if(up >= dn && hiB < nb - 1) { hiB++; got += counts[hiB]; }
+      else if(loB > 0)             { loB--; got += counts[loB]; }
+      else break;
+   }
+   double val = lo + loB * bucket;
+   double vah = lo + (hiB + 1) * bucket;
+   double close = C[endIdx];
+   return (close >= val && close <= vah);
 }
 
 //====================================================================
@@ -1418,6 +1533,11 @@ void OnTick()
    if(InpRequireKillzone && !InKillzone(TimeCurrent()))
    {
       Say("skip: outside killzone");
+      return;
+   }
+   if(InpRequireValidVA && !LastSessionClosedInsideVA(now))
+   {
+      Say("skip: last session closed outside its value area");
       return;
    }
    double rHigh, rLow;
