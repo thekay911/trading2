@@ -132,7 +132,7 @@ input double InpMaxLots         = 1.00;    // HARD cap on position size
 input double InpMaxRiskPctHard   = 3.0;    // refuse any order risking more than this
 input double InpSpreadFloorBP   = 0.55;    // assumed spread as bp of price, for the stop check
 input double InpMaxSpreadPrice  = 0.60;    // hard spread cap in price (dollars)
-input int    InpLimitExpiryMin  = 120;     // cancel unfilled limit after N MINUTES
+input int    InpLimitExpiryMin  = 480;     // cancel unfilled limit after N MINUTES
 input int    InpSwingLeft       = 1;       // fractal bars left
 input int    InpSwingRight      = 1;       // fractal bars right
 input int    InpLookbackBars    = 600;     // bars analysed each evaluation
@@ -1165,6 +1165,12 @@ void Place(Setup &s)
       // so on an H1 chart the order sat all day and filled hours later
       // while price was falling straight through the level - it filled
       // and hit the stop seconds afterwards.
+      //
+      // 480 rather than 120: measured over 21 years, a 2h expiry fills
+      // 62% of these limits and an 8h expiry fills 79%, and the longer
+      // one is the only variant that comes out positive. It is safe
+      // here only because the hold clock below runs from when the
+      // ORDER WAS PLACED, so a late fill gets less time, not more.
       datetime exp = TimeCurrent() + InpLimitExpiryMin * 60;
       sent = s.isBuy
              ? trade.BuyLimit (lots, entry, g_sym, stop, tp, ORDER_TIME_SPECIFIED, exp, InpComment)
@@ -1249,6 +1255,11 @@ void ManageOpen()
          g_open.model   = g_pend.model;
          g_open.beAtR   = g_pend.beAtR;
          g_open.holdMin = g_pend.holdMin;
+         // The plan's clock starts when the setup was made, not when
+         // the limit happened to fill. A fill five hours later gets
+         // the three hours that are left, not a fresh eight. This is
+         // how the model was measured.
+         g_open.opened  = g_pend.placed;
          g_hasPend = false;
       }
       else

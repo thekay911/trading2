@@ -333,6 +333,18 @@ class TestEaFileHealth(unittest.TestCase):
         self.assertNotIn("InpLimitExpiryBars", src)
         self.assertIn("InpLimitExpiryMin * 60", src)
 
+    def test_the_hold_clock_starts_when_the_order_was_placed(self):
+        """5시간 뒤에 체결된 지정가는 남은 3시간을 받아야지 새 8시간이 아니다.
+        모델을 그렇게 쟀다."""
+        self.assertIn("g_open.opened  = g_pend.placed", EA.read_text())
+
+    def test_limit_expiry_does_not_exceed_the_hold(self):
+        ea = ea_inputs()
+        exp = int(ea["InpLimitExpiryMin"])
+        for pre in ("InpUNI_", "InpTS_"):
+            self.assertLessEqual(exp, int(ea[pre + "HoldMin"]),
+                                 "만료가 보유한도보다 길면 계획이 끝난 뒤 체결된다")
+
     def test_limit_fills_inherit_their_plan(self):
         """지정가로 들어간 포지션에도 보유한도가 붙어야 한다.
         전에는 시장가 주문에만 붙어서, 지정가 모델은 시간 청산이 없었다."""
