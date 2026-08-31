@@ -1,8 +1,8 @@
-; 1% risk, 2 a day
+; Same, at 1% risk
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
-InpUseTurtleSoup=true
+InpUseTurtleSoup=false
 InpUseOTE=false
 InpUseTJR=false
 InpUNI_TargetRR=4.0
@@ -16,7 +16,7 @@ InpJS_RiskPct=1.0
 InpTS_TargetRR=4.0
 InpTS_HoldMin=480
 InpTS_BreakevenR=0.0
-InpTS_RiskPct=1.0
+InpTS_RiskPct=2.0
 InpOTE_TargetRR=3.0
 InpOTE_HoldMin=1440
 InpOTE_BreakevenR=0.0
@@ -46,6 +46,7 @@ InpSwingLeft=1
 InpSwingRight=1
 InpLookbackBars=600
 InpRequireKillzone=true
+InpNyAmOnly=true
 InpRequireContext=true
 InpCooldownBars=12
 InpContextLookback=40

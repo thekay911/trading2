@@ -84,12 +84,18 @@ class TestPlays(unittest.TestCase):
         self.assertGreaterEqual(float(ea["InpMinStopATR"]), 1.0)
         self.assertIn("InpMinStopATR > 0", EA.read_text())
 
-    def test_only_the_two_measured_models_are_on(self):
+    def test_only_the_measured_survivor_is_on_in_the_ea(self):
         ea = ea_inputs()
         self.assertEqual(ea["InpUseUnicorn"], "true")
-        self.assertEqual(ea["InpUseTurtleSoup"], "true")
-        for key in ("InpUseJudasSwing", "InpUseOTE", "InpUseTJR"):
+        for key in ("InpUseTurtleSoup", "InpUseJudasSwing", "InpUseOTE",
+                    "InpUseTJR"):
             self.assertEqual(ea[key], "false", key)
+
+    def test_the_session_is_narrowed_to_new_york_am(self):
+        """세 킬존을 다 쓰면 +0.005R, 뉴욕 오전만 쓰면 +0.138R 이었다."""
+        ea, src = ea_inputs(), EA.read_text()
+        self.assertEqual(ea["InpNyAmOnly"], "true")
+        self.assertIn("if(InpNyAmOnly) return (h >= 7.0 && h < 10.0);", src)
 
     def test_disabled_plays_say_why(self):
         for name, p in PLAYS.items():

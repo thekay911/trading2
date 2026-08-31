@@ -1,4 +1,4 @@
-; Everything on - for inspection
+; Everything on, all killzones - for inspection, measured worse
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=true
@@ -46,6 +46,7 @@ InpSwingLeft=1
 InpSwingRight=1
 InpLookbackBars=600
 InpRequireKillzone=true
+InpNyAmOnly=false
 InpRequireContext=true
 InpCooldownBars=12
 InpContextLookback=40

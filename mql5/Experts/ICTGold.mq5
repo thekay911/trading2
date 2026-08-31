@@ -84,9 +84,9 @@
 // Inputs
 //====================================================================
 input group "=== Models (each has its own plan) ==="
-input bool   InpUseUnicorn      = true;    // ON by request - read the header first
+input bool   InpUseUnicorn      = true;    // ON: the only model that held up
 input bool   InpUseJudasSwing   = false;   // OFF: positive on M30, negative on M15
-input bool   InpUseTurtleSoup   = true;    // ON by request - read the header first
+input bool   InpUseTurtleSoup   = false;   // OFF: -0.074R once the stop is checked on the fill bar
 input bool   InpUseOTE          = false;   // OFF: sign flips between timeframes
 input bool   InpUseTJR          = false;   // OFF: edge decays in the last three eras
 
@@ -145,7 +145,8 @@ input int    InpSwingRight      = 1;       // fractal bars right
 input int    InpLookbackBars    = 600;     // bars analysed each evaluation
 
 input group "=== Setup quality (this is what stops over-trading) ==="
-input bool   InpRequireKillzone = true;    // only London / NY AM / Silver Bullet
+input bool   InpRequireKillzone = true;    // only trade inside a killzone
+input bool   InpNyAmOnly        = true;    // narrow it to New York AM (07:00-10:00 NY)
 input bool   InpRequireContext  = true;    // skip Expansion: never chase a move already gone
 input int    InpCooldownBars    = 12;      // bars before the same model may fire again
 input int    InpContextLookback = 40;      // bars used to judge the context range
@@ -504,6 +505,12 @@ bool AsianRange(int now, double &hi, double &lo)
 bool InKillzone(datetime server)
 {
    double h = NyHour(server);
+   // New York AM alone was measurably better than all three windows:
+   //   all killzones   1,775 trades  38.4% win  +0.005R  drawdown 50R
+   //   NY AM only        446 trades  43.9% win  +0.138R  drawdown 16R
+   // London was the loser inside that mix (-0.052R over 1,023 trades).
+   if(InpNyAmOnly) return (h >= 7.0 && h < 10.0);
+
    if(h >= 2.0  && h < 5.0)  return true;    // London
    if(h >= 7.0  && h < 10.0) return true;    // New York AM
    if(h >= 10.0 && h < 11.0) return true;    // Silver Bullet AM
