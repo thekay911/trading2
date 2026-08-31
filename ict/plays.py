@@ -152,12 +152,16 @@ PLAYS: dict[str, Play] = {
             "저장소가 이미 두 번 틀린 방식이라 켜지 않는다. 낙폭 174R."),
     "FailedBreak": Play(
         "FailedBreak", target_rr=4.0, max_hold=96, be_at=0.0, risk_pct=1.0,
-        enabled=False, trades=0, expectancy=0.0,
+        enabled=False, trades=2860, expectancy=-0.036,
         why="변위 없이 구조를 건드린 돌파를 반대 방향 근거로 쓴다. 이 저장소는 "
-            "같은 사건을 그동안 '변위 없는 MSS 는 MSS 가 아니다' 로 버려 왔다. "
-            "구현은 됐지만 아직 21년 실측을 못 했다 — 봉마다 스윙을 훑는 부분이 "
-            "O(n^2) 라 494,000봉에서 끝나지 않는다. 1.5년 표본에서는 상태 게이트와 "
-            "하루 상한을 통과한 셋업이 0건이었다. 최적화 후 다시 재야 한다."),
+            "같은 사건을 '변위 없는 MSS 는 MSS 가 아니다' 로 버려 왔고, 영상은 "
+            "반대로 진입 근거로 쓰라고 한다. 21년 2,860거래로 재보니 -0.036R 이고 "
+            "6개 구간 중 5개가 음수, 최근 구간이 -0.18 로 가장 나쁘다. "
+            "**버린 쪽이 맞았다.**\n"
+            "      상태 게이트와는 구조적으로 충돌한다 — 이 모델은 정의상 극점을 "
+            "막 건드린 직후에 뜨는데 게이트는 그걸 Expansion 으로 분류해 전부 "
+            "거른다. 게이트를 켜면 21년 셋업이 0건이다. 위 숫자는 게이트를 끄고 "
+            "잰 것이다."),
     "SilverBullet": Play(
         "SilverBullet", target_rr=2.0, max_hold=12, be_at=0.0, risk_pct=1.0,
         enabled=False, trades=469, expectancy=0.013,

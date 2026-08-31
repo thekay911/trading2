@@ -542,20 +542,18 @@ def failed_break(m: Market, now: int, cfg: Config, within: int = 20) -> Setup | 
     kz = _gate(m, now, cfg)
     if kz is None:
         return None
-    sw = [x for x in m.swings if x.confirmed_at <= now and x.index >= now - 120]
-    if not sw:
-        return None
     bar = m.candles[now]
     v = m.volatility(now)
     need = m.gold.displacement(v)
     buf = m.gold.stop_buffer(v)
 
     for side in ("buy", "sell"):
-        # 매수: 저점을 건드렸지만 아래로 변위하지 못했다
-        pts = [x for x in sw if (not x.is_high) == (side == "buy")]
-        if not pts:
+        # 매수: 저점을 건드렸지만 아래로 변위하지 못했다.
+        # 봉마다 스윙 전체를 훑으면 O(n^2) 다 — 실제로 이 한 줄이 전체
+        # 실행시간의 90%였다. 엔진이 슬라이딩 윈도우로 미리 계산해 둔다.
+        ref = m.extreme_swing(now, low=(side == "buy"))
+        if ref is None:
             continue
-        ref = min(pts, key=lambda x: x.price) if side == "buy"             else max(pts, key=lambda x: x.price)
         broke_at = None
         for k in range(max(ref.confirmed_at + 1, now - within), now + 1):
             c = m.candles[k]

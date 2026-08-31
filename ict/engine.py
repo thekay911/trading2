@@ -47,6 +47,8 @@ class Market:
     _fvg_broken: list[int] = field(default_factory=list)      # FVG 가 종가로 뚫린 봉
     _swing_confirmed: list[int] = field(default_factory=list)   # 확정 시각 오름차순
     _inv_at: dict[int, list[int]] = field(default_factory=dict)  # 뚫린 봉 -> FVG 색인
+    _ext_low: list[Swing | None] = field(default_factory=list)   # 봉별 최저 스윙 저점
+    _ext_high: list[Swing | None] = field(default_factory=list)  # 봉별 최고 스윙 고점
 
     @classmethod
     def build(cls, candles: Sequence[Candle], gold: GoldProfile = STANDARD,
@@ -88,6 +90,8 @@ class Market:
         for j, b in enumerate(m._fvg_broken):
             if b < 10 ** 9:
                 m._inv_at.setdefault(b, []).append(j)
+        m._ext_low = _window_extreme(m.swings, len(bars), 120, low=True)
+        m._ext_high = _window_extreme(m.swings, len(bars), 120, low=False)
 
         m.daily = liq.daily_levels(bars)
         m.day_order = sorted(m.daily)
@@ -147,6 +151,16 @@ class Market:
             if len(out) >= limit:
                 break
         return out
+
+    def extreme_swing(self, now: int, low: bool) -> Swing | None:
+        """최근 120봉 안에 만들어졌고 `now` 까지 확정된 스윙의 극점.
+
+        봉마다 스윙 전체를 훑으면 O(n^2) 다. 프로파일러로 보니 그 한 줄이
+        failed_break 실행시간의 90% 였고, 494,000봉에서는 끝나지 않았다.
+        `build` 가 단조 덱으로 미리 계산해 둔다.
+        """
+        arr = self._ext_low if low else self._ext_high
+        return arr[now] if 0 <= now < len(arr) else None
 
     def inverted(self, now: int, direction: Dir, within: int = 12,
                  since: int = 0) -> list[pda.PDArray]:
@@ -222,6 +236,31 @@ class Market:
             if (p.kind == "BSL" and c.high > p.price) or (p.kind == "SSL" and c.low < p.price):
                 return liq.Pool(p.kind, p.price, p.label, p.index, p.strength, k)
         return p
+
+
+def _window_extreme(sw: Sequence[Swing], n: int, lookback: int,
+                    low: bool) -> list[Swing | None]:
+    """봉마다 '최근 lookback 봉 안에 만들어졌고 이미 확정된' 스윙의 극점.
+
+    단조 덱으로 한 번에 만든다. 창에서 빠지는 것만 앞에서 버리고,
+    새로 들어오는 것보다 못한 것은 뒤에서 버린다.
+    """
+    out: list[Swing | None] = [None] * n
+    want = [x for x in sw if (not x.is_high) == low]
+    want.sort(key=lambda x: x.confirmed_at)
+    dq: list[Swing] = []
+    k = 0
+    for i in range(n):
+        while k < len(want) and want[k].confirmed_at <= i:
+            x = want[k]
+            k += 1
+            while dq and ((dq[-1].price >= x.price) if low else (dq[-1].price <= x.price)):
+                dq.pop()
+            dq.append(x)
+        while dq and dq[0].index < i - lookback:
+            dq.pop(0)
+        out[i] = dq[0] if dq else None
+    return out
 
 
 def _first_break(bars, gaps) -> list[int]:
