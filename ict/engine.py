@@ -44,6 +44,9 @@ class Market:
     _pool_cache: dict[date, list[liq.Pool]] = field(default_factory=dict)
     _fvg_touch: list[int] = field(default_factory=list)
     _asia_cache: dict[date, tuple[float, float] | None] = field(default_factory=dict)
+    _fvg_broken: list[int] = field(default_factory=list)      # FVG 가 종가로 뚫린 봉
+    _swing_confirmed: list[int] = field(default_factory=list)   # 확정 시각 오름차순
+    _inv_at: dict[int, list[int]] = field(default_factory=dict)  # 뚫린 봉 -> FVG 색인
 
     @classmethod
     def build(cls, candles: Sequence[Candle], gold: GoldProfile = STANDARD,
@@ -77,6 +80,14 @@ class Market:
         # 각 FVG 의 CE(50%) 가 처음 닿는 봉을 미리 찾아 둔다.
         # 이걸 안 하면 조회할 때마다 그 FVG 이후를 전부 훑게 된다.
         m._fvg_touch = _first_touch(bars, m.fvgs)
+        m._fvg_broken = _first_break(bars, m.fvgs)
+        # 봉마다 전체 스윙/갭을 훑으면 O(n^2) 다. 494,000봉에서 스캔이
+        # 끝나지 않았다. 확정 시각과 '뚫린 봉' 으로 색인해 둔다.
+        m.swings.sort(key=lambda x: x.confirmed_at)
+        m._swing_confirmed = [x.confirmed_at for x in m.swings]
+        for j, b in enumerate(m._fvg_broken):
+            if b < 10 ** 9:
+                m._inv_at.setdefault(b, []).append(j)
 
         m.daily = liq.daily_levels(bars)
         m.day_order = sorted(m.daily)
@@ -137,6 +148,25 @@ class Market:
                 break
         return out
 
+    def inverted(self, now: int, direction: Dir, within: int = 12,
+                 since: int = 0) -> list[pda.PDArray]:
+        """`now` 기준 최근에 뚫려서 `direction` 편이 된 FVG 들.
+
+        원래 방향이 반대였던 갭이 종가로 뚫리면 역할이 뒤집힌다.
+        """
+        out: list[pda.PDArray] = []
+        lo = max(since, now - within)
+        for b in range(now, lo - 1, -1):
+            for j in self._inv_at.get(b, ()):
+                g = self.fvgs[j]
+                if g.direction == direction:
+                    continue              # 이미 이쪽 편이면 반전이 아니다
+                out.append(pda.PDArray("IFVG", -g.direction, g.top, g.bottom,
+                                       b, g.index))
+            if out:
+                break                     # 가장 최근에 뚫린 것만 쓴다
+        return out
+
     def _touched_at(self, j: int) -> int:
         return self._fvg_touch[j] if j < len(self._fvg_touch) else 10 ** 9
 
@@ -192,6 +222,39 @@ class Market:
             if (p.kind == "BSL" and c.high > p.price) or (p.kind == "SSL" and c.low < p.price):
                 return liq.Pool(p.kind, p.price, p.label, p.index, p.strength, k)
         return p
+
+
+def _first_break(bars, gaps) -> list[int]:
+    """각 FVG 가 **종가로** 반대편을 뚫은 첫 봉. 없으면 매우 큰 값.
+
+    뚫린 FVG 는 반대 역할이 된다(iFVG). 이걸 모델 안에서 매 봉 다시
+    계산하면 O(n^2) 가 된다 — 실제로 494,000봉에서 12분을 넘겼다.
+    갭은 인덱스 오름차순이고 아직 안 뚫린 것만 추적하면 한 번에 끝난다.
+    """
+    BIG = 10 ** 9
+    out = [BIG] * len(gaps)
+    live: list[int] = []
+    gi = 0
+    for i in range(len(bars)):
+        while gi < len(gaps) and gaps[gi].index <= i:
+            live.append(gi)
+            gi += 1
+        if not live:
+            continue
+        c = bars[i]
+        keep = []
+        for j in live:
+            g = gaps[j]
+            if g.index >= i:
+                keep.append(j)
+                continue
+            broke = (c.close < g.bottom) if g.direction == BULL else (c.close > g.top)
+            if broke:
+                out[j] = i
+            else:
+                keep.append(j)
+        live = keep
+    return out
 
 
 def _first_touch(bars, gaps) -> list[int]:

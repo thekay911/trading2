@@ -136,6 +136,28 @@ PLAYS: dict[str, Play] = {
         why="21년 합계는 +18.8R 로 겨우 양수지만 구간별로 0 근처에서 흔들리다 "
             "최근 두 구간이 음수다. 같은 재료(스윕+변위)를 쓰는 유니콘이 "
             "모든 면에서 낫다. 기본 해제."),
+    "CISD": Play(
+        "CISD", target_rr=4.0, max_hold=96, be_at=0.0, risk_pct=1.0,
+        enabled=False, trades=6044, expectancy=0.008,
+        why="영상(Casper Trading)에서 온 진입 모델. 21년 6,044거래에 +0.008R 로 "
+            "사실상 0 이고 낙폭이 236R 이다. 구간별로 +0.02/+0.07/+0.07/-0.09/"
+            "-0.07/+0.11 로 부호가 오간다. 기본 해제."),
+    "iFVG": Play(
+        "iFVG", target_rr=4.0, max_hold=96, be_at=0.0, risk_pct=1.0,
+        enabled=False, trades=5030, expectancy=0.018,
+        why="뚫린 FVG 를 반대 역할로 쓴다. 최근 1.5년만 보면 +0.162R(426거래)로 "
+            "이 저장소에서 제일 좋은 숫자였는데, 21년 5,030거래로는 +0.018R 이다. "
+            "구간별 -0.07/-0.12/+0.06/+0.02/+0.13/+0.07 — 2012년 이후로는 계속 "
+            "양수지만 그 이전은 음수다. 짧은 구간의 좋은 숫자를 채택하는 건 이 "
+            "저장소가 이미 두 번 틀린 방식이라 켜지 않는다. 낙폭 174R."),
+    "FailedBreak": Play(
+        "FailedBreak", target_rr=4.0, max_hold=96, be_at=0.0, risk_pct=1.0,
+        enabled=False, trades=0, expectancy=0.0,
+        why="변위 없이 구조를 건드린 돌파를 반대 방향 근거로 쓴다. 이 저장소는 "
+            "같은 사건을 그동안 '변위 없는 MSS 는 MSS 가 아니다' 로 버려 왔다. "
+            "구현은 됐지만 아직 21년 실측을 못 했다 — 봉마다 스윙을 훑는 부분이 "
+            "O(n^2) 라 494,000봉에서 끝나지 않는다. 1.5년 표본에서는 상태 게이트와 "
+            "하루 상한을 통과한 셋업이 0건이었다. 최적화 후 다시 재야 한다."),
     "SilverBullet": Play(
         "SilverBullet", target_rr=2.0, max_hold=12, be_at=0.0, risk_pct=1.0,
         enabled=False, trades=469, expectancy=0.013,

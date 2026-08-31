@@ -399,6 +399,197 @@ def tjr(m: Market, now: int, cfg: Config, sweep_within: int = 40) -> Setup | Non
     return None
 
 
+
+# ----------------------------------------------------------------------
+# 8. CISD — Change In State Of Delivery
+# ----------------------------------------------------------------------
+def _run_of(m: Market, now: int, down: bool, max_len: int = 12) -> tuple[int, int] | None:
+    """`now` 직전까지 한쪽 색 캔들이 지배한 구간 (start, end).
+
+    영상의 표현: "음봉들이 양봉을 삼키며 통제하고 있다".
+    여기서는 그 구간 안에서 지배색 캔들이 과반이고, 구간 전체가 한 방향으로
+    움직였을 때만 인정한다.
+    """
+    end = now - 1
+    if end < 3:
+        return None
+    for length in range(3, max_len + 1):
+        start = end - length + 1
+        if start < 1:
+            break
+        seg = m.candles[start:end + 1]
+        want = sum(1 for c in seg if (c.close < c.open) == down)
+        if want < len(seg) * 0.6:
+            continue
+        moved = (seg[0].open - seg[-1].close) if down else (seg[-1].close - seg[0].open)
+        if moved <= 0:
+            continue
+        return start, end
+    return None
+
+
+def cisd(m: Market, now: int, cfg: Config) -> Setup | None:
+    """배달 상태의 전환.
+
+    하락을 지배하던 구간 전체를 한 캔들이 되돌려 감싸면(그 구간의 시가를
+    종가로 넘어서면) 통제권이 넘어간 것으로 본다. 손절은 그 구간의 최저점,
+    목표는 반대편 유동성.
+
+    영상이 말하는 순서를 그대로 옮긴 것이고, 진입 자리가 FVG 도 오더블록도
+    아니라는 점에서 기존 모델과 다르다 — 되돌림을 기다리지 않고 전환하는
+    그 봉의 종가에 들어간다.
+    """
+    kz = _gate(m, now, cfg)
+    if kz is None:
+        return None
+    bar = m.candles[now]
+
+    for side in ("buy", "sell"):
+        down = (side == "buy")            # 매수는 하락 구간이 감싸질 때
+        run = _run_of(m, now, down)
+        if run is None:
+            continue
+        start, end = run
+        seg = m.candles[start:end + 1]
+        # 그 구간의 시작점을 종가로 넘어섰는가
+        if down and not (bar.close > seg[0].open):
+            continue
+        if not down and not (bar.close < seg[0].open):
+            continue
+        # 감싸는 봉은 구간의 평균 몸통보다 커야 한다
+        bodies = [abs(c.close - c.open) for c in seg]
+        if abs(bar.close - bar.open) < (sum(bodies) / len(bodies)):
+            continue
+
+        v = m.volatility(now)
+        buf = m.gold.stop_buffer(v)
+        extreme = min(c.low for c in seg) if down else max(c.high for c in seg)
+        entry = bar.close
+        stop = extreme - buf if down else extreme + buf
+        if (side == "buy" and stop >= entry) or (side == "sell" and stop <= entry):
+            continue
+
+        arr = pda.PDArray("CISD", BULL if side == "buy" else BEAR,
+                          max(entry, extreme), min(entry, extreme), now)
+        raid = _raid(m, now, side, 20)        # type: ignore[arg-type]
+        notes = [f"{end - start + 1}봉 {'하락' if down else '상승'} 구간을 종가로 되돌림",
+                 f"구간 극점 {extreme:.2f}"]
+        s = _build(m, now, "CISD", side, entry, stop, arr,   # type: ignore[arg-type]
+                   m.last_mss(now, 200), raid, kz, notes, cfg)
+        if s:
+            return s
+    return None
+
+
+# ----------------------------------------------------------------------
+# 9. iFVG — 뚫린 FVG 를 반대로 쓴다
+# ----------------------------------------------------------------------
+def ifvg(m: Market, now: int, cfg: Config, within: int = 60) -> Setup | None:
+    """FVG 가 종가로 뚫리면 반대 역할이 된다.
+
+    영상: "하락 FVG 들이 레벨로 내려가는데, 그중 하나를 종가로 뚫었다.
+    약세라면 일어나지 않을 일이다 -> 상승 확률이 높다."
+
+    `pdarrays.inversion_fvgs` 는 전부터 있었지만 이걸 쓰는 모델이 없었다.
+    """
+    kz = _gate(m, now, cfg)
+    if kz is None:
+        return None
+    bar = m.candles[now]
+    since = max(0, now - within)
+
+    for side in ("buy", "sell"):
+        want = BULL if side == "buy" else BEAR
+        inv = m.inverted(now, want, within=12, since=since)
+        if not inv:
+            continue
+        arr = inv[0]                      # 가장 최근에 뚫린 것
+
+        entry = arr.mid
+        if (side == "buy" and entry > bar.close) or (side == "sell" and entry < bar.close):
+            continue
+
+        v = m.volatility(now)
+        buf = m.gold.stop_buffer(v)
+        stop = arr.bottom - buf if side == "buy" else arr.top + buf
+        if (side == "buy" and stop >= entry) or (side == "sell" and stop <= entry):
+            continue
+
+        notes = [f"{'하락' if want == BULL else '상승'} FVG "
+                 f"{arr.bottom:.2f}~{arr.top:.2f} 가 종가로 뚫려 반전",
+                 f"뚫린 지 {now - arr.index}봉"]
+        s = _build(m, now, "iFVG", side, entry, stop, arr,
+                   m.last_mss(now, 200), _raid(m, now, side, 20),  # type: ignore[arg-type]
+                   kz, notes, cfg)
+        if s:
+            return s
+    return None
+
+
+# ----------------------------------------------------------------------
+# 10. 실패한 돌파 — 변위 없이 구조를 건드리면 반대로 간다
+# ----------------------------------------------------------------------
+def failed_break(m: Market, now: int, cfg: Config, within: int = 20) -> Setup | None:
+    """구조를 건드렸는데 변위가 없으면 그 방향은 실패다.
+
+    이 저장소는 그동안 '변위 없는 MSS 는 MSS 가 아니다' 로 **버렸다**.
+    영상은 같은 사건을 **반대 방향 진입 근거**로 쓴다 —
+    "에너지 있게 뚫지 못하면 되돌린다. 그리고 제 일을 못 한 그 고점을
+    목표로 삼아라."
+
+    같은 관찰을 버리느냐 쓰느냐의 차이라 재볼 값어치가 있다.
+    """
+    kz = _gate(m, now, cfg)
+    if kz is None:
+        return None
+    sw = [x for x in m.swings if x.confirmed_at <= now and x.index >= now - 120]
+    if not sw:
+        return None
+    bar = m.candles[now]
+    v = m.volatility(now)
+    need = m.gold.displacement(v)
+    buf = m.gold.stop_buffer(v)
+
+    for side in ("buy", "sell"):
+        # 매수: 저점을 건드렸지만 아래로 변위하지 못했다
+        pts = [x for x in sw if (not x.is_high) == (side == "buy")]
+        if not pts:
+            continue
+        ref = min(pts, key=lambda x: x.price) if side == "buy"             else max(pts, key=lambda x: x.price)
+        broke_at = None
+        for k in range(max(ref.confirmed_at + 1, now - within), now + 1):
+            c = m.candles[k]
+            if (side == "buy" and c.low < ref.price) or                (side == "sell" and c.high > ref.price):
+                broke_at = k
+                break
+        if broke_at is None:
+            continue
+
+        seg = m.candles[broke_at:now + 1]
+        travel = (ref.price - min(c.low for c in seg)) if side == "buy"             else (max(c.high for c in seg) - ref.price)
+        if travel >= need:
+            continue                       # 제대로 변위했다 -> 실패가 아니다
+        if (side == "buy" and bar.close <= ref.price) or            (side == "sell" and bar.close >= ref.price):
+            continue                       # 아직 안으로 돌아오지 않았다
+
+        extreme = min(c.low for c in seg) if side == "buy" else max(c.high for c in seg)
+        entry = bar.close
+        stop = extreme - buf if side == "buy" else extreme + buf
+        if (side == "buy" and stop >= entry) or (side == "sell" and stop <= entry):
+            continue
+
+        arr = pda.PDArray("FAILBREAK", BULL if side == "buy" else BEAR,
+                          max(entry, extreme), min(entry, extreme), broke_at)
+        notes = [f"스윙 {ref.price:.2f} 을 건드렸으나 변위 실패 "
+                 f"({travel:.2f} < {need:.2f})",
+                 "제 일을 못 한 반대편 극점이 목표"]
+        s = _build(m, now, "FailedBreak", side, entry, stop, arr,
+                   m.last_mss(now, 200), None, kz, notes, cfg)
+        if s:
+            return s
+    return None
+
+
 # ----------------------------------------------------------------------
 MODELS: dict[str, Callable[..., Setup | None]] = {
     "ICT2022": ict2022,
@@ -408,6 +599,9 @@ MODELS: dict[str, Callable[..., Setup | None]] = {
     "OTE": ote,
     "Unicorn": unicorn,
     "TJR": tjr,
+    "CISD": cisd,
+    "iFVG": ifvg,
+    "FailedBreak": failed_break,
 }
 
 
