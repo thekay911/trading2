@@ -589,6 +589,14 @@ def failed_break(m: Market, now: int, cfg: Config, within: int = 20) -> Setup | 
 
 
 # ----------------------------------------------------------------------
+# 11. 가치구조 + 피보 할인존 (별도 모듈)
+# ----------------------------------------------------------------------
+def _discount(m: Market, now: int, cfg: Config) -> Setup | None:
+    from ict.discount import discount
+    return discount(m, now, cfg)
+
+
+# ----------------------------------------------------------------------
 MODELS: dict[str, Callable[..., Setup | None]] = {
     "ICT2022": ict2022,
     "SilverBullet": silver_bullet,
@@ -600,6 +608,7 @@ MODELS: dict[str, Callable[..., Setup | None]] = {
     "CISD": cisd,
     "iFVG": ifvg,
     "FailedBreak": failed_break,
+    "Discount": _discount,
 }
 
 

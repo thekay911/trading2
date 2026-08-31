@@ -40,7 +40,8 @@ class TestCoverage(Base):
     def test_all_models_are_registered(self):
         self.assertEqual(set(MODELS), {"ICT2022", "SilverBullet", "TurtleSoup",
                                        "JudasSwing", "OTE", "Unicorn", "TJR",
-                                       "CISD", "iFVG", "FailedBreak"})
+                                       "CISD", "iFVG", "FailedBreak",
+                                       "Discount"})
 
     def test_the_sample_exercises_most_models(self):
         """한두 모델만 도는 표본으로는 아무것도 검증 못 한다."""

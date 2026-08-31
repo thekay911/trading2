@@ -49,6 +49,9 @@ class Market:
     _inv_at: dict[int, list[int]] = field(default_factory=dict)  # 뚫린 봉 -> FVG 색인
     _ext_low: list[Swing | None] = field(default_factory=list)   # 봉별 최저 스윙 저점
     _ext_high: list[Swing | None] = field(default_factory=list)  # 봉별 최고 스윙 고점
+    _va_end: list[int] = field(default_factory=list)      # 세션 끝 봉 (오름차순)
+    _va_info: list[tuple] = field(default_factory=list)   # (VAL, VAH, 종가가 안이었나)
+    _va_cache_built: bool = False
 
     @classmethod
     def build(cls, candles: Sequence[Candle], gold: GoldProfile = STANDARD,
@@ -151,6 +154,38 @@ class Market:
             if len(out) >= limit:
                 break
         return out
+
+    def prev_session_va(self, now: int):
+        """직전에 끝난 세션의 (VAL, VAH, 종가가 VA 안이었나).
+
+        21년 실측에서 유일하게 성적을 가른 필터다 — 종가가 VA 밖이면
+        그 가치구간은 합의가 아니었다는 뜻이고, 그 뒤의 셋업은 성적이
+        뒤집힌다. EA 의 LastSessionClosedInsideVA() 와 같은 계산이다.
+        """
+        if not self._va_cache_built:
+            self._build_session_va()
+        k = bisect.bisect_left(self._va_end, now) - 1
+        return self._va_info[k] if k >= 0 else None
+
+    def _build_session_va(self) -> None:
+        from tpo.profile import build as build_profile
+        from tpo.sessions import split as split_sessions
+        self._va_cache_built = True
+        idx = {id(c): i for i, c in enumerate(self.candles)}
+        for s in split_sessions(self.candles):
+            if len(s.bars) < 4:
+                continue
+            end = idx[id(s.bars[-1])]
+            atr = self.atr_at(end)
+            if atr <= 0:
+                continue
+            try:
+                p = build_profile(s.bars, tick=max(atr / 4.0, 1e-6))
+            except ValueError:
+                continue
+            val, vah = p.value_area()
+            self._va_end.append(end)
+            self._va_info.append((val, vah, val <= p.close <= vah))
 
     def extreme_swing(self, now: int, low: bool) -> Swing | None:
         """최근 120봉 안에 만들어졌고 `now` 까지 확정된 스윙의 극점.
