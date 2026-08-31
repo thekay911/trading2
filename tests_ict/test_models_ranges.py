@@ -135,9 +135,13 @@ class TestSetupIntegrity(Fixture):
         idx = [s.index for s in self.setups]
         self.assertEqual(idx, sorted(idx))
 
+    #: 습격 극점이 손절 자리를 정하는 모델들. iFVG/CISD 는 습격을 문맥으로만
+    #: 달고 손절은 각자의 배열(뚫린 갭, 되돌린 구간)에서 잡는다.
+    RAID_STOP_MODELS = {"TurtleSoup", "ICT2022", "TJR", "SilverBullet"}
+
     def test_stop_clears_the_raid_extreme(self):
         for s in self.setups:
-            if s.raid is None:
+            if s.raid is None or s.model not in self.RAID_STOP_MODELS:
                 continue
             if s.side == "buy":
                 self.assertLessEqual(s.stop, s.raid.extreme, s.describe())
