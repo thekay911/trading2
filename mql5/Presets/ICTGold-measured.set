@@ -1,4 +1,4 @@
-; MEASURED: about 1 a month, 51.4% win, ends at $7,001 not $4,241
+; MEASURED: about 1 a month, 51.4% win
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -34,6 +34,9 @@ InpFvgSpreadMult=2.0
 InpStopBufferATR=0.25
 InpStopBufferBP=1.5
 InpMaxEntryDistATR=3.0
+InpFixedStopPips=0
+InpFixedTpPips=0
+InpReverseSignals=false
 InpMaxSpreadToStop=0.15
 InpMinStopPrice=1.00
 InpMinStopATR=3.0

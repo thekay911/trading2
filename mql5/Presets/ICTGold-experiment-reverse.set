@@ -1,4 +1,4 @@
-; FREQUENT: 5 a day, stop after 2 losses in a row
+; EXPERIMENT: every signal inverted. Measured -0.240R over 21 years.
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -36,7 +36,7 @@ InpStopBufferBP=1.5
 InpMaxEntryDistATR=3.0
 InpFixedStopPips=0
 InpFixedTpPips=0
-InpReverseSignals=false
+InpReverseSignals=true
 InpMaxSpreadToStop=0.15
 InpMinStopPrice=1.00
 InpMinStopATR=3.0

@@ -133,6 +133,26 @@ input double InpStopBufferATR   = 0.25;    // stop buffer beyond the extreme
 input double InpStopBufferBP    = 1.5;
 input double InpMaxEntryDistATR = 3.0;     // skip limits further than this from price
 
+input group "=== Experiments (all measured worse - see the numbers) ==="
+//  Fixed stop/target in pips instead of ATR-relative. 1 pip = $0.10.
+//  20 pips = $2.00, 50 pips = $5.00.
+//    5-a-day setting, 2024 onward (today's price level):
+//      ATR-based stop, 4R    41.1% win  +0.007R  drawdown   176R
+//      20 pip / 50 pip       25.0% win  -0.208R  drawdown 1,127R
+//  At gold near $4,600 the M15 ATR is about $8. A $2 stop is a
+//  quarter of one bar - the candle decides the trade, not the setup.
+input int    InpFixedStopPips   = 0;       // 0 = use the ATR rule. 20 = $2.00 stop
+input int    InpFixedTpPips     = 0;       // 0 = use target R. 50 = $5.00 target
+
+//  Take every signal the other way round.
+//    5-a-day, 21 years   normal 38.9% -0.014R  /  reversed 29.5% -0.240R
+//    measured setting    normal 51.4% +0.420R  /  reversed 15.1% -0.673R
+//  A losing strategy reversed does not win. The win rate goes to
+//  29.5%, not to 61.1%: the stop distance stays the same while the
+//  entry moves to the wrong side of the move, and the spread is paid
+//  in both directions either way.
+input bool   InpReverseSignals  = false;   // trade every signal inverted
+
 input group "=== Execution guards ==="
 input double InpMaxSpreadToStop = 0.15;    // skip if spread > this fraction of the stop
 input double InpMinStopPrice    = 1.00;    // HARD floor on stop distance, in dollars
@@ -784,14 +804,30 @@ void ClearSetup(Setup &s)
 bool Finish(Setup &s, int now, double targetRR, double riskPct,
             double beAtR, int holdMin, string model, string why)
 {
+   // Reverse the whole setup if asked: swap the side and mirror the
+   // stop and target around the entry.
+   if(InpReverseSignals)
+   {
+      double d = s.stop - s.entry;
+      s.isBuy = !s.isBuy;
+      s.stop  = s.entry - d;
+   }
+
    double risk = MathAbs(s.entry - s.stop);
    if(risk <= 0) return false;
+
+   // Fixed pip stop overrides the ATR rule when set.
+   if(InpFixedStopPips > 0)
+   {
+      risk = InpFixedStopPips * 0.10;
+      s.stop = s.isBuy ? s.entry - risk : s.entry + risk;
+   }
 
    // Widen a stop that sits inside the noise. 96% of these setups came
    // out under 1x ATR - on gold that means entry and stop both live
    // inside one candle, and the candle decides, not the setup.
    double atrNow = AtrAt(now);
-   if(InpMinStopATR > 0 && atrNow > 0)
+   if(InpMinStopATR > 0 && atrNow > 0 && InpFixedStopPips <= 0)
    {
       double floorStop = atrNow * InpMinStopATR;
       if(risk < floorStop)
@@ -814,9 +850,17 @@ bool Finish(Setup &s, int now, double targetRR, double riskPct,
    if(atr <= 0) return false;
    if(MathAbs(s.entry - C[now]) > atr * InpMaxEntryDistATR) return false;
 
-   if(targetRR < InpMinRR) return false;
-   s.target   = s.isBuy ? s.entry + risk * targetRR
-                        : s.entry - risk * targetRR;
+   if(InpFixedTpPips > 0)
+   {
+      double rew = InpFixedTpPips * 0.10;
+      s.target = s.isBuy ? s.entry + rew : s.entry - rew;
+   }
+   else
+   {
+      if(targetRR < InpMinRR) return false;
+      s.target = s.isBuy ? s.entry + risk * targetRR
+                         : s.entry - risk * targetRR;
+   }
    s.model    = model;
    s.riskPct  = riskPct;
    s.beAtR    = beAtR;
