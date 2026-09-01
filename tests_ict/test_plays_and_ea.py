@@ -93,6 +93,25 @@ class TestPlays(unittest.TestCase):
                     "InpUseTJR"):
             self.assertEqual(ea[key], "false", key)
 
+    def test_frequency_modes_exist_and_are_documented(self):
+        """빈도를 올리면 무엇을 내주는지 파일 안에 숫자로 적혀 있어야 한다."""
+        src = EA.read_text()
+        self.assertIn("ENUM_FREQUENCY", src)
+        for mode in ("FREQ_MEASURED", "FREQ_MODERATE", "FREQ_FREQUENT"):
+            self.assertIn(mode, src)
+        self.assertIn("+0.420", src)
+        self.assertIn("-0.006", src)
+        self.assertIn("564R", src)
+
+    def test_frequency_overrides_the_individual_gates(self):
+        """모드가 게이트를 덮어쓰지 않으면 입력값끼리 모순이 난다."""
+        src = EA.read_text()
+        for g in ("g_useKillzone", "g_nyAmOnly", "g_useContext",
+                  "g_useDailyBias", "g_cooldown", "g_perDay"):
+            self.assertIn(g, src)
+        self.assertIn("if(InpFrequency == FREQ_MODERATE)", src)
+        self.assertIn("else if(InpFrequency == FREQ_FREQUENT)", src)
+
     def test_the_daily_bias_filter_is_on(self):
         """추세 역행 거래가 -0.108R 이었다. 정렬만 하면 +0.420R."""
         ea, src = ea_inputs(), EA.read_text()
@@ -118,7 +137,7 @@ class TestPlays(unittest.TestCase):
         """세 킬존을 다 쓰면 +0.005R, 뉴욕 오전만 쓰면 +0.138R 이었다."""
         ea, src = ea_inputs(), EA.read_text()
         self.assertEqual(ea["InpNyAmOnly"], "true")
-        self.assertIn("if(InpNyAmOnly) return (h >= 7.0 && h < 10.0);", src)
+        self.assertIn("if(g_nyAmOnly) return (h >= 7.0 && h < 10.0);", src)
 
     def test_disabled_plays_say_why(self):
         for name, p in PLAYS.items():

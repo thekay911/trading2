@@ -1,14 +1,14 @@
-; Everything on, no filters - for inspection, measured much worse
+; MODERATE: about 3 a day, 36.6% win, +0.009R, drawdown 285R
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
-InpUseJudasSwing=true
-InpUseTurtleSoup=true
-InpUseOTE=true
-InpUseTJR=true
+InpUseJudasSwing=false
+InpUseTurtleSoup=false
+InpUseOTE=false
+InpUseTJR=false
 InpUNI_TargetRR=4.0
 InpUNI_HoldMin=480
 InpUNI_BreakevenR=0.0
-InpUNI_RiskPct=2.0
+InpUNI_RiskPct=1.0
 InpJS_TargetRR=4.0
 InpJS_HoldMin=1440
 InpJS_BreakevenR=0.0
@@ -45,9 +45,10 @@ InpLimitExpiryMin=480
 InpSwingLeft=1
 InpSwingRight=1
 InpLookbackBars=600
+InpFrequency=1
 InpRequireKillzone=true
-InpNyAmOnly=false
-InpRequireDailyBias=false
+InpNyAmOnly=true
+InpRequireDailyBias=true
 InpDailyBiasBars=5
 InpRequireContext=true
 InpCooldownBars=12

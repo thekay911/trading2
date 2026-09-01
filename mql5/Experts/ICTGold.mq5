@@ -94,7 +94,9 @@ input group "=== Unicorn plan (best measured edge) ==="
 input double InpUNI_TargetRR    = 4.0;     // target in R
 input int    InpUNI_HoldMin     = 480;     // max hold in MINUTES (480 = 8h)
 input double InpUNI_BreakevenR  = 0.0;     // measured: breakeven stops hurt
-input double InpUNI_RiskPct     = 2.0;     // risk per trade, % of balance
+input double InpUNI_RiskPct     = 1.0;     // risk per trade, % of balance
+//  1% not 2%: at five trades a day, 2% risk hits the 6% daily loss
+//  cap after three losers and the rest of the day is blocked anyway.
 
 input group "=== JudasSwing plan ==="
 input double InpJS_TargetRR     = 4.0;
@@ -143,6 +145,29 @@ input int    InpLimitExpiryMin  = 480;     // cancel unfilled limit after N MINU
 input int    InpSwingLeft       = 1;       // fractal bars left
 input int    InpSwingRight      = 1;       // fractal bars right
 input int    InpLookbackBars    = 600;     // bars analysed each evaluation
+
+input group "=== How often to trade ==="
+//  Measured on XAUUSD M15 2004-2026. Each rung buys frequency with
+//  expectancy and, much more sharply, with drawdown:
+//
+//    setup                            per day  trades   win%   exp R  maxDD
+//    Unicorn + NY AM + daily trend      0.04      208  51.4%  +0.420    11R
+//    - daily trend                      0.09      446  43.9%  +0.138    16R
+//    - NY AM only                       0.19      949  42.1%  +0.077    25R
+//    - all models                       3.03   18,169  36.6%  +0.009   285R
+//    - context gate  (FREQUENT)         5.56   32,707  37.3%  -0.006   564R
+//
+//  FREQUENT is what "at least 5 a day" costs: the edge goes negative
+//  and the drawdown is fifty times larger. It is the default here
+//  because it was asked for, not because it measured well.
+//  Set InpFrequency = FREQ_MEASURED to get the top row back.
+enum ENUM_FREQUENCY
+  {
+   FREQ_MEASURED,   // ~1/month  - the configuration that measured best
+   FREQ_MODERATE,   // ~3/day    - all models, gates on
+   FREQ_FREQUENT    // ~5/day    - gates off
+  };
+input ENUM_FREQUENCY InpFrequency = FREQ_FREQUENT;   // trade frequency
 
 input group "=== Setup quality (this is what stops over-trading) ==="
 input bool   InpRequireKillzone = true;    // only trade inside a killzone
@@ -291,6 +316,14 @@ bool IsUsDst(datetime gmt)
 }
 
 double g_gmtOffset = 0;      // resolved once in OnInit
+
+// Resolved in OnInit from InpFrequency + the individual gate inputs.
+bool g_useKillzone  = true;
+bool g_nyAmOnly     = true;
+bool g_useContext   = true;
+bool g_useDailyBias = true;
+int  g_cooldown     = 12;
+int  g_perDay       = 3;
 
 datetime ToGmt(datetime server)
 {
@@ -517,7 +550,7 @@ bool AsianRange(int now, double &hi, double &lo)
 //====================================================================
 int DailyBias()
 {
-   if(!InpRequireDailyBias) return 0;
+   if(!g_useDailyBias) return 0;
    int n = InpDailyBiasBars;
    if(n < 1) return 0;
    double now = iClose(g_sym, PERIOD_D1, 1);
@@ -539,7 +572,7 @@ bool InKillzone(datetime server)
    //   all killzones   1,775 trades  38.4% win  +0.005R  drawdown 50R
    //   NY AM only        446 trades  43.9% win  +0.138R  drawdown 16R
    // London was the loser inside that mix (-0.052R over 1,023 trades).
-   if(InpNyAmOnly) return (h >= 7.0 && h < 10.0);
+   if(g_nyAmOnly) return (h >= 7.0 && h < 10.0);
 
    if(h >= 2.0  && h < 5.0)  return true;    // London
    if(h >= 7.0  && h < 10.0) return true;    // New York AM
@@ -803,7 +836,7 @@ bool FirstBreak(int r, double lvl, bool above, int scan)
 bool TurtleSoup(int now, Setup &s)
 {
    ClearSetup(s);
-   if(!InpUseTurtleSoup) return false;
+   if(!InpUseTurtleSoup && InpFrequency == FREQ_MEASURED) return false;
 
    datetime today = NyDay(T[now]);
    double pdh, pdl, ah, al;
@@ -877,7 +910,7 @@ bool TurtleSoup(int now, Setup &s)
 bool JudasSwing(int now, Setup &s)
 {
    ClearSetup(s);
-   if(!InpUseJudasSwing) return false;
+   if(!InpUseJudasSwing && InpFrequency == FREQ_MEASURED) return false;
 
    double h = NyHour(T[now]);
    if(h < 2.0 || h >= 5.0) return false;          // london manipulation window
@@ -951,7 +984,7 @@ bool JudasSwing(int now, Setup &s)
 bool Ote(int now, Setup &s)
 {
    ClearSetup(s);
-   if(!InpUseOTE) return false;
+   if(!InpUseOTE && InpFrequency == FREQ_MEASURED) return false;
 
    int ls, le; double lo, hi;
    int dir = FindMss(now, 60, ls, le, lo, hi);
@@ -1030,7 +1063,7 @@ bool OriginBlock(int ls, int le, int dir, double &top, double &bot, int &at)
 bool Unicorn(int now, Setup &s)
 {
    ClearSetup(s);
-   if(!InpUseUnicorn) return false;
+   if(!InpUseUnicorn && InpFrequency == FREQ_MEASURED) return false;
 
    int ls, le; double lo, hi;
    int dir = FindMss(now, 60, ls, le, lo, hi);
@@ -1085,7 +1118,7 @@ bool Unicorn(int now, Setup &s)
 bool Tjr(int now, Setup &s)
 {
    ClearSetup(s);
-   if(!InpUseTJR) return false;
+   if(!InpUseTJR && InpFrequency == FREQ_MEASURED) return false;
 
    datetime today = NyDay(T[now]);
    double pdh, pdl, ah, al;
@@ -1258,7 +1291,7 @@ bool OnCooldown(string model)
    int i = ModelSlot(model);
    if(i < 0 || g_lastFire[i] == 0) return false;
    int bars = (int)((TimeCurrent() - g_lastFire[i]) / PeriodSeconds(PERIOD_CURRENT));
-   return (bars < InpCooldownBars);
+   return (bars < g_cooldown);
 }
 
 void MarkFired(string model)
@@ -1274,7 +1307,7 @@ bool DayBlocked()
       if(InpUnlock) { g_locked = false; Say("lock released"); }
       else return true;
    }
-   if(g_dayTrades >= InpMaxTradesPerDay) return true;
+   if(g_dayTrades >= g_perDay) return true;
    if(g_dayTrades >= InpHardCapPerDay)   return true;
    if(g_consecLoss >= InpMaxConsecLosses) return true;
 
@@ -1476,6 +1509,24 @@ int OnInit()
    // Every killzone decision hangs off this. Getting it wrong by two
    // hours makes the EA trade the wrong sessions while reporting that
    // it traded the right ones.
+   // Frequency mode overrides the individual gates below.
+   g_useKillzone  = InpRequireKillzone;
+   g_nyAmOnly     = InpNyAmOnly;
+   g_useContext   = InpRequireContext;
+   g_useDailyBias = InpRequireDailyBias;
+   g_cooldown     = InpCooldownBars;
+   g_perDay       = InpMaxTradesPerDay;
+   if(InpFrequency == FREQ_MODERATE)
+     {
+      g_nyAmOnly = false; g_useDailyBias = false;
+      g_perDay = 6; g_cooldown = 12;
+     }
+   else if(InpFrequency == FREQ_FREQUENT)
+     {
+      g_nyAmOnly = false; g_useDailyBias = false; g_useContext = false;
+      g_perDay = 10; g_cooldown = 4;
+     }
+
    g_gmtOffset = InpServerGmtOffset;
    if(InpAutoDetectOffset && !MQLInfoInteger(MQL_TESTER))
    {
@@ -1576,7 +1627,7 @@ void OnTick()
    // These are what separate "a setup exists" from "this is worth
    // risking money on". Without them the EA traded 28x more often
    // than the model it was supposed to be running.
-   if(InpRequireKillzone && !InKillzone(TimeCurrent()))
+   if(g_useKillzone && !InKillzone(TimeCurrent()))
    {
       Say("skip: outside killzone");
       return;
@@ -1588,7 +1639,7 @@ void OnTick()
    }
    double rHigh, rLow;
    int ctx = MarketContext(now, rHigh, rLow);
-   if(InpRequireContext && ctx != 2 && ctx != 3)
+   if(g_useContext && ctx != 2 && ctx != 3)
    {
       Say(StringFormat("skip: context is %s",
                        ctx == 0 ? "Consolidation" : "Expansion"));
@@ -1596,14 +1647,15 @@ void OnTick()
    }
 
    int bias = DailyBias();
+   bool all = (InpFrequency != FREQ_MEASURED);   // frequency modes need every model
 
    // Evaluated in measured-expectancy order: the best model gets the bar.
    Setup s;
-   if(!OnCooldown("Unicorn")    && Unicorn(now, s)    && s.ok && BiasOk(s, bias)) { Place(s); return; }
-   if(!OnCooldown("JudasSwing") && JudasSwing(now, s) && s.ok && BiasOk(s, bias)) { Place(s); return; }
-   if(!OnCooldown("TurtleSoup") && TurtleSoup(now, s) && s.ok && BiasOk(s, bias)) { Place(s); return; }
-   if(!OnCooldown("TJR")        && Tjr(now, s)        && s.ok && BiasOk(s, bias)) { Place(s); return; }
-   if(!OnCooldown("OTE")        && Ote(now, s)        && s.ok && BiasOk(s, bias)) { Place(s); return; }
+   if((all || InpUseUnicorn) && !OnCooldown("Unicorn")    && Unicorn(now, s)    && s.ok && BiasOk(s, bias)) { Place(s); return; }
+   if((all || InpUseJudasSwing) && !OnCooldown("JudasSwing") && JudasSwing(now, s) && s.ok && BiasOk(s, bias)) { Place(s); return; }
+   if((all || InpUseTurtleSoup) && !OnCooldown("TurtleSoup") && TurtleSoup(now, s) && s.ok && BiasOk(s, bias)) { Place(s); return; }
+   if((all || InpUseTJR) && !OnCooldown("TJR")        && Tjr(now, s)        && s.ok && BiasOk(s, bias)) { Place(s); return; }
+   if((all || InpUseOTE) && !OnCooldown("OTE")        && Ote(now, s)        && s.ok && BiasOk(s, bias)) { Place(s); return; }
 }
 
 void OnTrade()

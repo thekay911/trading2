@@ -1,4 +1,4 @@
-; Unicorn, NY AM, with the daily trend. 51.4% win over 21 years.
+; FREQUENT: about 5 trades a day, as requested
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -8,7 +8,7 @@ InpUseTJR=false
 InpUNI_TargetRR=4.0
 InpUNI_HoldMin=480
 InpUNI_BreakevenR=0.0
-InpUNI_RiskPct=2.0
+InpUNI_RiskPct=1.0
 InpJS_TargetRR=4.0
 InpJS_HoldMin=1440
 InpJS_BreakevenR=0.0
@@ -45,6 +45,7 @@ InpLimitExpiryMin=480
 InpSwingLeft=1
 InpSwingRight=1
 InpLookbackBars=600
+InpFrequency=FREQ_FREQUENT
 InpRequireKillzone=true
 InpNyAmOnly=true
 InpRequireDailyBias=true
