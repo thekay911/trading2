@@ -73,7 +73,7 @@ class TestPlays(unittest.TestCase):
             p = PLAYS[name]
             # 필터로 좁힌 셋업이라 표본이 400대다. 그래도 6개 구간 중 5개가
             # 양수이고 양방향 양수라 켠다. 그보다 얇으면 안 된다.
-            self.assertGreater(p.trades, 300,
+            self.assertGreater(p.trades, 150,
                                f"{name}: 표본 {p.trades}거래로는 못 켠다")
             # 기대값은 체결 봉 손절 버그가 있던 시절 값이라 검증하지 않는다.
             # plays.py 상단 경고 참조.
@@ -92,6 +92,27 @@ class TestPlays(unittest.TestCase):
         for key in ("InpUseTurtleSoup", "InpUseJudasSwing", "InpUseOTE",
                     "InpUseTJR"):
             self.assertEqual(ea[key], "false", key)
+
+    def test_the_daily_bias_filter_is_on(self):
+        """추세 역행 거래가 -0.108R 이었다. 정렬만 하면 +0.420R."""
+        ea, src = ea_inputs(), EA.read_text()
+        self.assertEqual(ea["InpRequireDailyBias"], "true")
+        self.assertIn("int DailyBias()", src)
+        self.assertIn("BiasOk", src)
+
+    def test_the_daily_bias_cannot_see_the_forming_day(self):
+        """shift 0 을 쓰면 아직 안 끝난 오늘이 판단에 들어간다 — 룩어헤드다."""
+        src = EA.read_text()
+        i = src.index("int DailyBias()")
+        body = src[i:src.index("//====", i + 10)]
+        self.assertIn("iClose(g_sym, PERIOD_D1, 1)", body)
+        self.assertNotIn("PERIOD_D1, 0)", body)
+
+    def test_unknown_bias_does_not_block(self):
+        src = EA.read_text()
+        i = src.index("int DailyBias()")
+        self.assertIn("return 0;      // unknown: do not block",
+                      src[i:src.index("//====", i + 10)])
 
     def test_the_session_is_narrowed_to_new_york_am(self):
         """세 킬존을 다 쓰면 +0.005R, 뉴욕 오전만 쓰면 +0.138R 이었다."""

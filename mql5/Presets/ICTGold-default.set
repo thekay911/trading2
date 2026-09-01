@@ -1,4 +1,4 @@
-; Unicorn, New York AM only, 3x ATR stop, 4R. 43.9% win over 21 years.
+; Unicorn, NY AM, with the daily trend. 51.4% win over 21 years.
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -47,6 +47,8 @@ InpSwingRight=1
 InpLookbackBars=600
 InpRequireKillzone=true
 InpNyAmOnly=true
+InpRequireDailyBias=true
+InpDailyBiasBars=5
 InpRequireContext=true
 InpCooldownBars=12
 InpContextLookback=40

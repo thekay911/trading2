@@ -1,4 +1,4 @@
-; Everything on, all killzones - for inspection, measured worse
+; Everything on, no filters - for inspection, measured much worse
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=true
@@ -47,6 +47,8 @@ InpSwingRight=1
 InpLookbackBars=600
 InpRequireKillzone=true
 InpNyAmOnly=false
+InpRequireDailyBias=false
+InpDailyBiasBars=5
 InpRequireContext=true
 InpCooldownBars=12
 InpContextLookback=40
