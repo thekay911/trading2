@@ -154,12 +154,18 @@ input group "=== How often to trade ==="
 //    Unicorn + NY AM + daily trend      0.04      208  51.4%  +0.420    11R
 //    - daily trend                      0.09      446  43.9%  +0.138    16R
 //    - NY AM only                       0.19      949  42.1%  +0.077    25R
-//    - all models                       3.03   18,169  36.6%  +0.009   285R
-//    - context gate  (FREQUENT)         5.56   32,707  37.3%  -0.006   564R
+//    - all models     (MODERATE)        2.86   17,214  36.4%  +0.010   238R
+//    - context gate   (FREQUENT)        7.34   43,381  37.0%  -0.008   752R
 //
-//  FREQUENT is what "at least 5 a day" costs: the edge goes negative
-//  and the drawdown is fifty times larger. It is the default here
-//  because it was asked for, not because it measured well.
+//  Run as an account instead - five a day, one position at a time,
+//  stop after two losses in a row, 1% risk, $3,000 start - FREQUENT
+//  comes out at 9,225 trades, +0.014R, drawdown 128R, ending at
+//  $4,241 over 21 years. The same account on the MEASURED setting
+//  takes 208 trades and ends at $7,001 with a 11R drawdown.
+//
+//  So: 44x the trades, 40% less money, twelve times the drawdown.
+//  FREQUENT is the default because it was asked for, not because it
+//  measured well.
 //  Set InpFrequency = FREQ_MEASURED to get the top row back.
 enum ENUM_FREQUENCY
   {
@@ -193,7 +199,15 @@ input double InpFridayCutoffNY  = 15.0;
 input group "=== Daily circuit breaker ==="
 input int    InpMaxTradesPerDay = 3;      // good setups only - 2 or 3 a day is plenty
 input int    InpHardCapPerDay   = 10;     // never more than this, whatever happens
-input int    InpMaxConsecLosses = 3;
+input int    InpMaxConsecLosses = 2;      // stop for the day after N losses in a row
+//  Measured on the 5-a-day setting, 21 years, $3,000 start, 1% risk,
+//  one position at a time:
+//     no stop      9,911 tr  +0.008R  DD 142R  ends at $2,414
+//     3 in a row   9,864 tr  +0.007R  DD 141R  ends at $2,333
+//     2 in a row   9,225 tr  +0.014R  DD 128R  ends at $4,241  <- this
+//     1 in a row   6,340 tr  +0.007R  DD  77R  ends at $2,425
+//  Two is the right number. Three barely does anything and one cuts
+//  off too many days that would have recovered.
 input double InpMaxDailyLossPct = 6.0;     // stop the day at this drawdown
 input double InpHardStopPct     = 10.0;    // locks trading until reviewed
 input bool   InpHaltNeedsReview = true;    // lock stays until you release it
@@ -1524,7 +1538,7 @@ int OnInit()
    else if(InpFrequency == FREQ_FREQUENT)
      {
       g_nyAmOnly = false; g_useDailyBias = false; g_useContext = false;
-      g_perDay = 10; g_cooldown = 4;
+      g_perDay = 5; g_cooldown = 4;
      }
 
    g_gmtOffset = InpServerGmtOffset;

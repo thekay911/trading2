@@ -1,4 +1,4 @@
-; MODERATE: about 3 a day, 36.6% win, +0.009R, drawdown 285R
+; MODERATE: about 3 a day
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -65,7 +65,7 @@ InpBlockFridayLate=true
 InpFridayCutoffNY=15.0
 InpMaxTradesPerDay=3
 InpHardCapPerDay=10
-InpMaxConsecLosses=3
+InpMaxConsecLosses=2
 InpMaxDailyLossPct=6.0
 InpHardStopPct=10.0
 InpHaltNeedsReview=true

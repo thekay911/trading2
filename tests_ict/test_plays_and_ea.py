@@ -100,8 +100,14 @@ class TestPlays(unittest.TestCase):
         for mode in ("FREQ_MEASURED", "FREQ_MODERATE", "FREQ_FREQUENT"):
             self.assertIn(mode, src)
         self.assertIn("+0.420", src)
-        self.assertIn("-0.006", src)
-        self.assertIn("564R", src)
+        self.assertIn("-0.008", src)
+        self.assertIn("752R", src)
+
+    def test_two_consecutive_losses_stops_the_day(self):
+        """실측: 2연패 중단이 3연패보다 잔고를 $2,333 -> $4,241 로 바꿨다."""
+        ea = ea_inputs()
+        self.assertEqual(int(ea["InpMaxConsecLosses"]), 2)
+        self.assertIn("g_consecLoss", EA.read_text())
 
     def test_frequency_overrides_the_individual_gates(self):
         """모드가 게이트를 덮어쓰지 않으면 입력값끼리 모순이 난다."""

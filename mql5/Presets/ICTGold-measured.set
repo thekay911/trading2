@@ -1,4 +1,4 @@
-; MEASURED: about 1 a month, 51.4% win, +0.420R, drawdown 11R
+; MEASURED: about 1 a month, 51.4% win, ends at $7,001 not $4,241
 ; ICTGold.mq5 preset
 InpUseUnicorn=true
 InpUseJudasSwing=false
@@ -65,7 +65,7 @@ InpBlockFridayLate=true
 InpFridayCutoffNY=15.0
 InpMaxTradesPerDay=3
 InpHardCapPerDay=10
-InpMaxConsecLosses=3
+InpMaxConsecLosses=2
 InpMaxDailyLossPct=6.0
 InpHardStopPct=10.0
 InpHaltNeedsReview=true
